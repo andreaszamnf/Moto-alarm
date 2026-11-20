@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#0b0f17"/>
+  <path d="M50 14 L82 26 V50 C82 69 69 81 50 89 C31 81 18 69 18 50 V26 Z" fill="#ea580c"/>
+  <text x="50" y="63" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="700" font-size="34" fill="#ffffff">H</text>
+</svg>

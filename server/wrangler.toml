@@ -1,0 +1,35 @@
+# Cloudflare Worker config. Deployment steps are in README.md.
+name = "moto-alarm"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+# The phone app (PWA) is served as static files; requests that are not files reach the Worker.
+[assets]
+directory = "../app"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "moto-alarm"
+database_id = "PUT-YOUR-D1-DATABASE-ID-HERE"  # from: npx wrangler d1 create moto-alarm
+
+# Firmware updates for the board (signed images and the newest version), uploaded by
+# tools/publish-firmware.mjs. Never public: the images contain the device key.
+[[kv_namespaces]]
+binding = "FIRMWARE"
+id = "PUT-YOUR-KV-NAMESPACE-ID-HERE"  # from: npx wrangler kv namespace create FIRMWARE
+
+# Public address of the app; push services need it to identify who sends the notifications.
+[vars]
+PUBLIC_ORIGIN = "https://moto-alarm.YOUR-SUBDOMAIN.workers.dev"
+VAPID_SUBJECT = "https://moto-alarm.YOUR-SUBDOMAIN.workers.dev"
+
+# Every 30 minutes: "lost contact" check and cleanup of data older than 90 days.
+[triggers]
+crons = ["*/5 * * * *"]
+
+# Secrets (set with `npx wrangler secret put NAME`, never written here):
+#   APP_PASSWORD       password for the phone app
+#   TOKEN_SECRET       random string used to sign app logins
+#   DEVICE_KEY         random string the device sends with every report
+#   VAPID_PRIVATE_JWK  output of `npm run vapid`, enables push notifications

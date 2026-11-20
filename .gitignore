@@ -1,0 +1,13 @@
+# Local dev keys, production secrets and tool caches
+.dev/
+.secrets/
+node_modules/
+server/.wrangler/
+firmware/moto-alarm/secrets.h
+firmware/moto-alarm/wifi.h
+firmware/build/
+.claude/settings.local.json
+.claude/active-sessions.json
+
+# The public release made by tools/export-public.mjs (a git repository of its own)
+/public/

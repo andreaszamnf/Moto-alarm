@@ -1,0 +1,858 @@
+<title>Κολλήσεις συναγερμού Hornet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Commissioner:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap">
+<style>
+:root {
+  /* Layout: one reading column (46rem). The wiring summary comes first, the steps are a numbered checklist because their order matters, figures sit in plain bordered frames. */
+  --bg: #f1f3ef;
+  --surface: #ffffff;
+  --surface-2: #e7ebe4;
+  --ink: #18201a;
+  --muted: #566159;
+  --line: #d3d9cf;
+  --accent: #a24b1f;
+  --accent-soft: #f5e4da;
+  --on-accent: #ffffff;
+  --ok: #1b7446;
+  --ok-soft: #e1f2e7;
+  --bad: #b0281f;
+  --bad-soft: #fbe8e5;
+  --warn-soft: #fbf0d9;
+  /* the real parts: boards, metal, solder, wires */
+  --pcb-lily: #15181b;
+  --pcb-edge: #3a4148;
+  --hole: #0a0b0c;
+  --module-pcb: #213a2c;
+  --shield: #c8cdd2;
+  --shield-ink: #262b30;
+  --pcb-gy: #3346a8;
+  --pcb-gy-edge: #233287;
+  --chip: #1b1b1d;
+  --res: #d8cdb6;
+  --pad: #d4a53b;
+  --silk: #f6f6f1;
+  --fr4: #c2b47a;
+  --mask: #1f2a24;
+  --copper: #c46f38;
+  --solder: #b9c0c6;
+  --solder-dull: #9da3a6;
+  --solder-edge: #7c858c;
+  --iron-tip: #8f989f;
+  --iron-metal: #c6ccd1;
+  --iron-handle: #33404b;
+  --w-red: #d62839;
+  --w-black: #222326;
+  --w-green: #1f9d57;
+  --w-yellow: #e3aa00;
+  --w-blue: #2563eb;
+  --casing: rgba(0, 0, 0, 0.28);
+  --font-display: "Commissioner", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101311; --surface: #181c19; --surface-2: #212622; --ink: #e5eae5; --muted: #9ba49c; --line: #2c332e;
+    --accent: #e48b58; --accent-soft: #3a2316; --on-accent: #1a0f08;
+    --ok: #5dcb8e; --ok-soft: #13301f; --bad: #ff7b6f; --bad-soft: #3b1613; --warn-soft: #3a2c0d;
+    --pcb-edge: #5f6870; --pcb-gy-edge: #7183ea; --fr4: #a39557; --solder-edge: #a0a8ae;
+    --iron-handle: #5c7083; --w-black: #2b2d31; --casing: rgba(232, 236, 238, 0.72);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101311; --surface: #181c19; --surface-2: #212622; --ink: #e5eae5; --muted: #9ba49c; --line: #2c332e;
+  --accent: #e48b58; --accent-soft: #3a2316; --on-accent: #1a0f08;
+  --ok: #5dcb8e; --ok-soft: #13301f; --bad: #ff7b6f; --bad-soft: #3b1613; --warn-soft: #3a2c0d;
+  --pcb-edge: #5f6870; --pcb-gy-edge: #7183ea; --fr4: #a39557; --solder-edge: #a0a8ae;
+  --iron-handle: #5c7083; --w-black: #2b2d31; --casing: rgba(232, 236, 238, 0.72);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 16px/1.6 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+}
+.wrap { max-width: 46rem; margin: 0 auto; display: grid; gap: 44px; }
+section { display: grid; gap: 14px; min-width: 0; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+h1 { font-weight: 800; font-size: clamp(1.9rem, 6vw, 2.7rem); line-height: 1.08; letter-spacing: -0.01em; }
+h2 { font-weight: 700; font-size: 1.45rem; line-height: 1.2; }
+h3 { font-weight: 700; font-size: 1.05rem; line-height: 1.3; }
+p { margin: 0; }
+ul, ol { margin: 0; }
+a { color: var(--accent); text-underline-offset: 2px; }
+b, strong { font-weight: 650; }
+.muted { color: var(--muted); }
+.small { font-size: 0.88rem; }
+.mono { font-family: var(--font-mono); }
+
+.top { display: grid; gap: 14px; }
+.eyebrow { font: 600 0.76rem/1 var(--font-mono); letter-spacing: 0.09em; color: var(--accent); }
+.lead { font-size: 1.1rem; color: var(--muted); max-width: 40rem; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 28px; margin: 4px 0 0; }
+.facts div { min-width: 0; }
+.facts dt { font-size: 0.78rem; color: var(--muted); }
+.facts dd { margin: 0; font: 700 1.05rem/1.3 var(--font-display); }
+.tools-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+
+button {
+  font: 600 0.9rem/1.2 var(--font-body);
+  padding: 9px 15px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
+button[aria-pressed="true"] { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+button.link { border: 0; background: none; padding: 4px 2px; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.callout { border-radius: 12px; padding: 14px 16px; display: grid; gap: 4px; }
+.callout.bad { background: var(--bad-soft); }
+.callout.warn { background: var(--warn-soft); }
+.callout.info { background: var(--surface-2); }
+.callout-title { font-weight: 700; }
+.callout.bad .callout-title { color: var(--bad); }
+
+/* wiring summary */
+.map { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 6px 14px; display: grid; }
+.map-row { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(70px, 1fr) minmax(0, 0.9fr); align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.map-row:first-child { border-top: 0; }
+.map-head { font-size: 0.78rem; color: var(--muted); font-weight: 600; padding: 8px 0 6px; }
+.pin { min-width: 0; }
+.pin b { font: 700 1.05rem/1.2 var(--font-mono); }
+.pin small { display: block; color: var(--muted); font-size: 0.8rem; }
+.wire { display: grid; gap: 4px; justify-items: center; min-width: 0; }
+.wire i { display: block; width: 100%; height: 6px; border-radius: 3px; background: var(--w); box-shadow: 0 0 0 1.5px var(--casing); }
+.wire em { font-style: normal; font-size: 0.8rem; color: var(--muted); }
+.map-row.none .pin b { font-size: 0.9rem; }
+.notes { display: grid; gap: 8px; padding-left: 1.1rem; }
+
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 640px) { .two { grid-template-columns: 1fr; } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.list { padding-left: 1.1rem; display: grid; gap: 7px; }
+
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+figcaption { font-size: 0.88rem; color: var(--muted); }
+.fig-svg { display: block; width: 100%; height: auto; margin-inline: auto; }
+.fig-svg.tall { max-width: 360px; }
+.fig-svg.mid { max-width: 400px; }
+.fig-svg.wide { max-width: 540px; }
+
+.moves { padding-left: 1.3rem; display: grid; gap: 8px; }
+.moves li::marker { font-family: var(--font-mono); font-weight: 700; color: var(--accent); }
+
+.joints { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 620px) { .joints { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.joint { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.joint-svg { width: 100%; height: auto; display: block; background: var(--surface-2); border-radius: 10px; }
+.verdict { justify-self: start; font: 700 0.75rem/1 var(--font-body); padding: 5px 9px; border-radius: 999px; }
+.verdict.ok { background: var(--ok-soft); color: var(--ok); }
+.verdict.bad { background: var(--bad-soft); color: var(--bad); }
+.joint p { font-size: 0.86rem; }
+
+/* steps */
+.progress { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; font-size: 0.9rem; }
+.bar { flex: 1 1 140px; height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.25s ease; }
+.steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.step.is-done { border-color: var(--ok); }
+.step-head { display: flex; align-items: center; gap: 12px; }
+.step-num { flex: none; width: 2rem; height: 2rem; border-radius: 50%; display: grid; place-items: center; font: 700 0.95rem/1 var(--font-mono); background: var(--accent-soft); color: var(--accent); }
+.step.is-done .step-num { background: var(--ok-soft); color: var(--ok); }
+.step-head h3 { flex: 1; min-width: 0; }
+.done { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--muted); cursor: pointer; flex: none; }
+.done input { width: 20px; height: 20px; accent-color: var(--ok); margin: 0; }
+.step .list { gap: 8px; }
+
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+th { font-size: 0.8rem; color: var(--muted); font-weight: 600; }
+td:last-child { white-space: nowrap; }
+.yes { color: var(--ok); font-weight: 700; }
+.no { color: var(--bad); font-weight: 700; }
+
+.faults { display: grid; gap: 0; margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 4px 16px; }
+.faults div { padding: 12px 0; border-top: 1px solid var(--line); display: grid; gap: 4px; }
+.faults div:first-child { border-top: 0; }
+.faults dt { font-weight: 700; }
+.faults dd { margin: 0; color: var(--ink); }
+
+.tech { background: var(--surface-2); border-radius: 14px; padding: 16px; display: grid; gap: 12px; }
+.tech pre { margin: 0; white-space: pre-wrap; font: 500 0.88rem/1.55 var(--font-mono); overflow-wrap: anywhere; }
+.sources { padding-left: 1.1rem; display: grid; gap: 6px; font-size: 0.9rem; }
+footer { font-size: 0.82rem; color: var(--muted); }
+
+/* drawing */
+.s-pcb { fill: var(--pcb-lily); stroke: var(--pcb-edge); stroke-width: 2; }
+.s-modpcb { fill: var(--module-pcb); }
+.s-meander { fill: none; stroke: var(--pad); stroke-width: 2; stroke-linejoin: round; }
+.s-shield { fill: var(--shield); stroke: var(--pcb-edge); stroke-width: 1; }
+.s-pad { fill: var(--pad); }
+.s-pad.dim { opacity: 0.35; }
+.s-hole { fill: var(--hole); }
+.s-usb { fill: var(--shield); stroke: var(--pcb-edge); stroke-width: 1.5; }
+.s-tear { fill: var(--surface); }
+.s-gy { fill: var(--pcb-gy); stroke: var(--pcb-gy-edge); stroke-width: 2; }
+.s-mount { fill: var(--surface); stroke: var(--pad); stroke-width: 3; }
+.s-chip { fill: var(--chip); }
+.s-res { fill: var(--res); }
+.s-case { stroke: var(--casing); stroke-width: 9; stroke-linecap: round; fill: none; }
+.s-wire { stroke-width: 5.5; stroke-linecap: round; fill: none; }
+.w-red { stroke: var(--w-red); } .w-black { stroke: var(--w-black); } .w-green { stroke: var(--w-green); }
+.w-yellow { stroke: var(--w-yellow); } .w-blue { stroke: var(--w-blue); }
+.f-red { fill: var(--w-red); }
+.s-fr4 { fill: var(--fr4); }
+.s-mask { fill: var(--mask); }
+.s-copper { fill: var(--copper); }
+.s-cut { fill: var(--surface); }
+.joint-svg .s-cut { fill: var(--surface-2); }
+.s-core { fill: var(--copper); }
+.s-solder { fill: var(--solder); stroke: var(--solder-edge); stroke-width: 1; }
+.s-solder-dull { fill: var(--solder-dull); stroke: var(--solder-edge); stroke-width: 1; }
+.s-solderwire { stroke: var(--solder); stroke-width: 6; stroke-linecap: round; }
+.s-iron-tip { fill: var(--iron-tip); }
+.s-iron-metal { fill: var(--iron-metal); }
+.s-iron-handle { fill: var(--iron-handle); }
+.s-marker { fill: var(--accent); }
+.s-lead, .s-dim { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.s-twist { stroke: var(--solder-edge); stroke-width: 1.2; }
+.t-silk { fill: var(--silk); font: 600 11px var(--font-mono); text-anchor: middle; }
+.t-silk-s { fill: var(--silk); opacity: 0.8; font: 500 9.5px var(--font-mono); text-anchor: end; }
+.t-silk-v { fill: var(--silk); font: 600 10.5px var(--font-mono); }
+.t-silk-c { fill: var(--silk); font: 500 9.5px var(--font-mono); text-anchor: middle; }
+.t-shield { fill: var(--shield-ink); font: 700 14px var(--font-display); text-anchor: middle; }
+.t-shield-s { fill: var(--shield-ink); font: 500 10px var(--font-mono); text-anchor: middle; }
+.t-tag { fill: var(--ink); font: 600 12px var(--font-body); }
+.t-ord { fill: var(--muted); font: 500 10.5px var(--font-mono); text-anchor: middle; }
+.t-target { fill: var(--ink); font: 700 11px var(--font-mono); text-anchor: middle; }
+.t-note { fill: var(--muted); font: 500 12px var(--font-body); }
+.t-label { fill: var(--ink); font: 500 12px var(--font-body); }
+.t-marker { fill: var(--on-accent); font: 700 11px var(--font-mono); text-anchor: middle; }
+.t-end { text-anchor: end; }
+.t-mid { text-anchor: middle; }
+
+@media (prefers-reduced-motion: reduce) { .bar i { transition: none; } }
+@media print {
+  :root, :root:not([data-theme="light"]), :root[data-theme="dark"] {
+    --bg: #ffffff; --surface: #ffffff; --surface-2: #eef0ec; --ink: #111111; --muted: #444444; --line: #cccccc;
+    --pcb-edge: #3a4148; --w-black: #222326; --casing: rgba(0, 0, 0, 0.28); color-scheme: light;
+  }
+  body { padding: 0; }
+  .no-print { display: none !important; }
+  .step, figure, .callout, .map, .tech, .faults div, .panel { break-inside: avoid; }
+}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <p class="eyebrow">ΣΥΝΑΓΕΡΜΟΣ HORNET · ΣΥΝΑΡΜΟΛΟΓΗΣΗ</p>
+  <h1>Κολλήσεις συναγερμού Hornet</h1>
+  <p class="lead">Πώς κολλάς τον αισθητήρα κίνησης ADXL345 (πλακετάκι GY-291) πάνω στη LilyGO T-SIM7600, βήμα-βήμα.</p>
+  <dl class="facts">
+    <div><dt>Καλώδια</dt><dd>5</dd></div>
+    <div><dt>Κολλήσεις</dt><dd>10</dd></div>
+    <div><dt>Χρόνος</dt><dd>περίπου 1 ώρα</dd></div>
+    <div><dt>Δεν θέλουν κόλληση</dt><dd>μπαταρία, κεραίες, SIM</dd></div>
+  </dl>
+  <div class="tools-row no-print">
+    <button id="wake" type="button" aria-pressed="false">Κράτα την οθόνη αναμμένη</button>
+    <span id="wake-msg" class="small muted" role="status"></span>
+  </div>
+</header>
+
+<div class="callout bad" role="note">
+  <p class="callout-title">Η μπαταρία μένει έξω όσο κολλάς</p>
+  <p>Βγάλε την 18650 από τη θήκη και αποσύνδεσε το USB πριν ζεστάνεις το κολλητήρι. Μην κολλήσεις ποτέ τίποτα πάνω στη μπαταρία και μην τη ζεστάνεις: μπορεί να πάρει φωτιά.</p>
+</div>
+
+<section id="syndeseis" aria-labelledby="h-map">
+  <h2 id="h-map">Ποιο καλώδιο πάει πού</h2>
+  <div class="map" role="table" aria-label="Οι πέντε συνδέσεις ανάμεσα στη LilyGO και στον αισθητήρα">
+    <div class="map-row map-head" role="row">
+      <span role="columnheader">LilyGO, δεξιά σειρά</span>
+      <span role="columnheader">Καλώδιο</span>
+      <span role="columnheader">Αισθητήρας</span>
+    </div>
+    <div class="map-row" role="row" style="--w: var(--w-red)">
+      <span class="pin" role="cell"><b>3V3</b><small>3η τρύπα</small></span>
+      <span class="wire" role="cell"><i></i><em>κόκκινο</em></span>
+      <span class="pin" role="cell"><b>VCC</b></span>
+    </div>
+    <div class="map-row" role="row" style="--w: var(--w-black)">
+      <span class="pin" role="cell"><b>GND</b><small>4η τρύπα</small></span>
+      <span class="wire" role="cell"><i></i><em>μαύρο</em></span>
+      <span class="pin" role="cell"><b>GND</b></span>
+    </div>
+    <div class="map-row" role="row" style="--w: var(--w-green)">
+      <span class="pin" role="cell"><b>22</b><small>5η τρύπα · SCL</small></span>
+      <span class="wire" role="cell"><i></i><em>πράσινο</em></span>
+      <span class="pin" role="cell"><b>SCL</b></span>
+    </div>
+    <div class="map-row" role="row" style="--w: var(--w-yellow)">
+      <span class="pin" role="cell"><b>21</b><small>6η τρύπα · SDA</small></span>
+      <span class="wire" role="cell"><i></i><em>κίτρινο</em></span>
+      <span class="pin" role="cell"><b>SDA</b></span>
+    </div>
+    <div class="map-row" role="row" style="--w: var(--w-blue)">
+      <span class="pin" role="cell"><b>39</b><small>11η τρύπα</small></span>
+      <span class="wire" role="cell"><i></i><em>μπλε</em></span>
+      <span class="pin" role="cell"><b>INT1</b></span>
+    </div>
+    <div class="map-row none" role="row">
+      <span class="pin muted" role="cell">—</span>
+      <span class="wire" role="cell"><em>χωρίς καλώδιο</em></span>
+      <span class="pin" role="cell"><b>CS · INT2 · SDO</b></span>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>Οι τρύπες της LilyGO μετράνε από πάνω, με το ESP32 προς τα πάνω. Το σχέδιο είναι στο βήμα 5.</li>
+    <li>Στη LilyGO το 22 έρχεται πριν από το 21, ενώ στον αισθητήρα το SDA έρχεται πριν από το SCL. Γι' αυτό το πράσινο και το κίτρινο καλώδιο διασταυρώνονται. Είναι σωστό.</li>
+    <li>Τα χρώματα είναι πρόταση. Αν τα καλωδιάκια σου έχουν άλλα, διάλεξε δικά σου και γράψ' τα σε ένα χαρτί.</li>
+    <li>Τα CS και SDO δεν θέλουν καλώδιο: το πλακετάκι GY-291 τα ρυθμίζει ήδη με δικές του αντιστάσεις.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="h-tools">
+  <h2 id="h-tools">Τι χρειάζεσαι</h2>
+  <div class="two">
+    <div class="panel">
+      <h3>Απαραίτητα</h3>
+      <ul class="list">
+        <li><b>Κολλητήρι</b> με λεπτή μύτη, μυτερή ή πλακέ 1–2 χιλ. Καλύτερα με ρύθμιση θερμοκρασίας. Μαζί η βάση του και ένα σφουγγαράκι ή σύρμα καθαρισμού.</li>
+        <li><b>Καλάι</b> 0,6–0,8 χιλ. με flux μέσα. Αυτό με μόλυβδο (60/40 ή 63/37) λιώνει πιο εύκολα και είναι το καλύτερο για αρχή.</li>
+        <li><b>Πλαγιοκόφτης</b>, για τα σύρματα και τα περισσεύματα.</li>
+        <li><b>Απογυμνωτής καλωδίων</b>, ή προσεκτικά με τον κόφτη.</li>
+        <li><b>Χαρτοταινία</b>, για να μένουν τα καλώδια στη θέση τους.</li>
+        <li>Τα <b>καλωδιάκια θηλυκό-θηλυκό</b> που πήρες. Κόβουμε τα βυσματάκια τους και κρατάμε το σύρμα.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Βοηθάνε πολύ</h3>
+      <ul class="list">
+        <li><b>Πολύμετρο</b> με «μπιπ», για τον έλεγχο πριν μπει η μπαταρία. Υπάρχει από περίπου €10.</li>
+        <li><b>Flux</b> σε στυλό ή πάστα, όταν το καλάι δεν απλώνει.</li>
+        <li><b>Φυτίλι αποκόλλησης</b>, για να μαζέψεις καλάι αν γίνει λάθος.</li>
+        <li><b>Γυαλιά</b>: τα κομμένα σύρματα πετάγονται.</li>
+        <li><b>Τρίτο χέρι</b> ή λίγη πλαστελίνη, για να κρατάει την πλακέτα.</li>
+        <li><b>Το κινητό σου</b>, για να βλέπεις τις κολλήσεις με το ζουμ της κάμερας.</li>
+        <li><b>Διπλή ταινία αφρού</b> και <b>θερμόκολλα</b> ή μονωτική ταινία, για τη στερέωση στο τέλος.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout info">
+    <p class="callout-title">Δεν έχεις κολλητήρι;</p>
+    <p>Ένα μαγαζί που επισκευάζει ηλεκτρονικά το κάνει σε λίγα λεπτά. Δείξε του την κάρτα «Για τον τεχνικό» στο τέλος της σελίδας.</p>
+  </div>
+</section>
+
+<section aria-labelledby="h-safety">
+  <h2 id="h-safety">Ασφάλεια</h2>
+  <ul class="list">
+    <li>Η μύτη φτάνει τους 350 °C. Όταν δεν κρατάς το κολλητήρι, είναι στη βάση του. Αν σου πέσει, άφησέ το να πέσει.</li>
+    <li>Ο καπνός βγαίνει από το flux και ερεθίζει. Δούλευε με ανοιχτό παράθυρο ή με έναν ανεμιστήρα που τον διώχνει από το πρόσωπό σου.</li>
+    <li>Αν το καλάι έχει μόλυβδο, μην τρως την ώρα της δουλειάς και πλύνε τα χέρια σου μετά.</li>
+    <li>Η μπαταρία μένει έξω μέχρι το βήμα 8. Η μύτη να μην ακουμπήσει το πλαστικό της θήκης της, γιατί λιώνει.</li>
+    <li>Όταν τελειώσεις, βγάλε το κολλητήρι από την πρίζα.</li>
+  </ul>
+</section>
+
+<section aria-labelledby="h-tech">
+  <h2 id="h-tech">Πώς γίνεται μια καλή κόλληση</h2>
+  <figure>
+    <svg class="fig-svg wide" viewBox="0 0 360 232" role="img" aria-label="Τομή μιας τρύπας, με την πίσω πλευρά της πλακέτας προς τα πάνω. Το σύρμα μπαίνει από μπροστά και βγαίνει από πάνω. Η μύτη του κολλητηριού ακουμπάει μαζί το χάλκινο pad και το σύρμα από τη μία μεριά (κίνηση 3) και το καλάι έρχεται από την άλλη μεριά (κίνηση 4).">
+<rect x="20" y="137" width="320" height="28" class="s-fr4"/>
+<rect x="20" y="134" width="320" height="4" class="s-mask"/><rect x="20" y="164" width="320" height="4" class="s-mask"/>
+<rect x="166" y="130" width="28" height="42" class="s-cut"/>
+<rect x="166" y="134" width="6" height="34" class="s-copper"/><rect x="188" y="134" width="6" height="34" class="s-copper"/>
+<rect x="148" y="130" width="24" height="6" class="s-copper"/><rect x="188" y="130" width="24" height="6" class="s-copper"/>
+<rect x="148" y="166" width="24" height="6" class="s-copper"/><rect x="188" y="166" width="24" height="6" class="s-copper"/>
+<rect x="175.5" y="108" width="9" height="66" rx="2" class="s-core"/>
+<rect x="171" y="172" width="18" height="60" rx="3" class="f-red"/>
+<polygon points="129.17,67.19 79.67,17.69 62.69,34.67 112.19,84.17" class="s-iron-handle"/>
+<polygon points="150.38,94.06 126.34,70.02 115.02,81.34 139.06,105.38" class="s-iron-metal"/>
+<polygon points="173,128 150.38,94.06 139.06,105.38" class="s-iron-tip"/>
+<line x1="186" y1="128" x2="256.7" y2="57.3" class="s-solderwire"/>
+<circle cx="132" cy="120" r="9" class="s-marker"/><text x="132" y="124" class="t-marker">3</text>
+<circle cx="226" cy="116" r="9" class="s-marker"/><text x="226" y="120" class="t-marker">4</text>
+<text x="264" y="60" class="t-label">καλάι</text>
+<text x="340" y="126" class="t-note t-end">πίσω πλευρά</text>
+<text x="340" y="188" class="t-note t-end">μπροστά</text>
+<line x1="230" y1="198" x2="208" y2="173" class="s-lead"/>
+<text x="232" y="206" class="t-label">χάλκινο pad</text>
+<text x="196" y="226" class="t-label">σύρμα, από μπροστά</text>
+</svg>
+    <figcaption>Η πλακέτα με την πίσω πλευρά προς τα πάνω. Το 3 και το 4 είναι οι κινήσεις 3 και 4 από κάτω: η μύτη ζεσταίνει μαζί pad και σύρμα, το καλάι έρχεται από απέναντι.</figcaption>
+  </figure>
+  <ol class="moves">
+    <li>Ρύθμισε το κολλητήρι στους <b>330 °C</b>. Με καλάι χωρίς μόλυβδο, στους <b>370 °C</b>.</li>
+    <li>Καθάρισε τη μύτη στο σφουγγαράκι και λιώσε πάνω της λίγο καλάι, να γυαλίζει. Αυτό το κάνεις πριν από κάθε κόλληση.</li>
+    <li>Ακούμπησε τη μύτη ταυτόχρονα στο χάλκινο δαχτυλίδι γύρω από την τρύπα (pad) και στο σύρμα. Μέτρα 1–2 δευτερόλεπτα.</li>
+    <li>Φέρε το καλάι από την άλλη μεριά, εκεί που ενώνονται pad και σύρμα, όχι πάνω στη μύτη. Λιώνει και απλώνει μόνο του.</li>
+    <li>Μόλις γεμίσει το pad, σε περίπου 1 δευτερόλεπτο, τράβα πρώτα το καλάι και μετά τη μύτη.</li>
+    <li>Μην κουνήσεις το σύρμα για 3 δευτερόλεπτα, μέχρι να παγώσει.</li>
+  </ol>
+  <div class="callout warn">
+    <p class="callout-title">Αν δεν πιάνει σε 4–5 δευτερόλεπτα, σταμάτα</p>
+    <p>Άφησέ το να κρυώσει, καθάρισε τη μύτη, βάλε λίγο flux και ξαναδοκίμασε. Η πολλή ζέστη ξεκολλάει το pad από την πλακέτα. Η τρύπα GND θέλει λίγο περισσότερο χρόνο από τις άλλες, γιατί ενώνεται με μεγάλη επιφάνεια χαλκού.</p>
+  </div>
+  <div class="joints">
+    <div class="joint"><svg class="joint-svg" viewBox="0 0 120 92" role="img" aria-label="Σωστή κόλληση: το καλάι κατεβαίνει από το σύρμα σαν ηφαίστειο και καλύπτει όλο το pad."><rect x="6" y="56" width="108" height="18" class="s-fr4"/><rect x="6" y="54" width="108" height="3" class="s-mask"/><rect x="6" y="73" width="108" height="3" class="s-mask"/><rect x="53" y="52" width="14" height="26" class="s-cut"/><rect x="53" y="54" width="2" height="22" class="s-copper"/><rect x="65" y="54" width="2" height="22" class="s-copper"/><rect x="41" y="51" width="14" height="4" class="s-copper"/><rect x="65" y="51" width="14" height="4" class="s-copper"/><rect x="41" y="75" width="14" height="4" class="s-copper"/><rect x="65" y="75" width="14" height="4" class="s-copper"/><rect x="56.5" y="22" width="7" height="60" rx="1.5" class="s-core"/><path d="M41 51C50 50.5 55.5 44 56.5 30H63.5C64.5 44 70 50.5 79 51Z" class="s-solder"/></svg><span class="verdict ok">Σωστή</span><p>Γυαλιστερή, σαν μικρό ηφαίστειο, καλύπτει όλο το pad.</p></div>
+    <div class="joint"><svg class="joint-svg" viewBox="0 0 120 92" role="img" aria-label="Λίγο καλάι: φαίνεται χαλκός γύρω από το καλάι."><rect x="6" y="56" width="108" height="18" class="s-fr4"/><rect x="6" y="54" width="108" height="3" class="s-mask"/><rect x="6" y="73" width="108" height="3" class="s-mask"/><rect x="53" y="52" width="14" height="26" class="s-cut"/><rect x="53" y="54" width="2" height="22" class="s-copper"/><rect x="65" y="54" width="2" height="22" class="s-copper"/><rect x="41" y="51" width="14" height="4" class="s-copper"/><rect x="65" y="51" width="14" height="4" class="s-copper"/><rect x="41" y="75" width="14" height="4" class="s-copper"/><rect x="65" y="75" width="14" height="4" class="s-copper"/><rect x="56.5" y="22" width="7" height="60" rx="1.5" class="s-core"/><path d="M50 51C53 50.6 55.8 48.5 56.5 44H63.5C64.2 48.5 67 50.6 70 51Z" class="s-solder"/></svg><span class="verdict bad">Λίγο καλάι</span><p>Φαίνεται χαλκός. Ξαναζέστανε και πρόσθεσε λίγο.</p></div>
+    <div class="joint"><svg class="joint-svg" viewBox="0 0 120 92" role="img" aria-label="Μπάλα: το καλάι κάθεται πάνω στο σύρμα και δεν πιάνει το pad."><rect x="6" y="56" width="108" height="18" class="s-fr4"/><rect x="6" y="54" width="108" height="3" class="s-mask"/><rect x="6" y="73" width="108" height="3" class="s-mask"/><rect x="53" y="52" width="14" height="26" class="s-cut"/><rect x="53" y="54" width="2" height="22" class="s-copper"/><rect x="65" y="54" width="2" height="22" class="s-copper"/><rect x="41" y="51" width="14" height="4" class="s-copper"/><rect x="65" y="51" width="14" height="4" class="s-copper"/><rect x="41" y="75" width="14" height="4" class="s-copper"/><rect x="65" y="75" width="14" height="4" class="s-copper"/><rect x="56.5" y="22" width="7" height="60" rx="1.5" class="s-core"/><ellipse cx="60" cy="34" rx="15" ry="12" class="s-solder-dull"/></svg><span class="verdict bad">Μπάλα</span><p>Δεν έπιασε το pad. Καθάρισε τη μύτη, βάλε flux, ξαναζέστανε.</p></div>
+    <div class="joint"><svg class="joint-svg" viewBox="0 0 120 92" role="img" aria-label="Γέφυρα: το καλάι ενώνει δύο διπλανές τρύπες."><rect x="6" y="56" width="108" height="18" class="s-fr4"/><rect x="6" y="54" width="108" height="3" class="s-mask"/><rect x="6" y="73" width="108" height="3" class="s-mask"/><rect x="29" y="52" width="14" height="26" class="s-cut"/><rect x="29" y="54" width="2" height="22" class="s-copper"/><rect x="41" y="54" width="2" height="22" class="s-copper"/><rect x="17" y="51" width="14" height="4" class="s-copper"/><rect x="41" y="51" width="14" height="4" class="s-copper"/><rect x="17" y="75" width="14" height="4" class="s-copper"/><rect x="41" y="75" width="14" height="4" class="s-copper"/><rect x="32.5" y="22" width="7" height="60" rx="1.5" class="s-core"/><rect x="77" y="52" width="14" height="26" class="s-cut"/><rect x="77" y="54" width="2" height="22" class="s-copper"/><rect x="89" y="54" width="2" height="22" class="s-copper"/><rect x="65" y="51" width="14" height="4" class="s-copper"/><rect x="89" y="51" width="14" height="4" class="s-copper"/><rect x="65" y="75" width="14" height="4" class="s-copper"/><rect x="89" y="75" width="14" height="4" class="s-copper"/><rect x="80.5" y="22" width="7" height="60" rx="1.5" class="s-core"/><path d="M17 51C26 50.5 31.5 44 32.5 30H39.5C40.5 40 46 44 60 45C74 44 79.5 40 80.5 30H87.5C88.5 44 94 50.5 103 51Z" class="s-solder"/></svg><span class="verdict bad">Γέφυρα</span><p>Ενώνει δύο τρύπες. Πρέπει να φύγει.</p></div>
+  </div>
+  <p class="small muted">Το καλάι χωρίς μόλυβδο βγαίνει πιο θαμπό, ακόμα κι όταν η κόλληση είναι καλή.</p>
+</section>
+
+<section aria-labelledby="h-steps">
+  <h2 id="h-steps">Βήματα</h2>
+  <div class="progress no-print">
+    <span>Έγιναν <b id="done-count">0</b> από 8</span>
+    <div class="bar" aria-hidden="true"><i id="progress-bar"></i></div>
+    <button id="reset-steps" type="button" class="link">Ξεκίνα από την αρχή</button>
+  </div>
+  <ol class="steps">
+    <li class="step">
+      <div class="step-head"><span class="step-num">1</span><h3>Ετοίμασε τον πάγκο</h3><label class="done no-print"><input type="checkbox" id="step-1" data-step="1">Έγινε</label></div>
+      <ul class="list">
+        <li>Τραπέζι με χαρτόνι ή ξύλο από πάνω, καλό φως, ανοιχτό παράθυρο.</li>
+        <li>Το κολλητήρι στη βάση του, στους 330 °C. Βρέξε το σφουγγαράκι και στύψ' το.</li>
+        <li>Η μπαταρία έξω από τη θήκη, το USB αποσυνδεδεμένο. Τον μικρό συρόμενο διακόπτη ON/OFF στο πλάι της LilyGO βάλ' τον στο OFF.</li>
+        <li>Πριν πιάσεις τις πλακέτες, ακούμπησε ένα καλοριφέρ ή μια μεταλλική βρύση, για τον στατικό ηλεκτρισμό. Πιάνε τις πλακέτες από τις άκρες.</li>
+      </ul>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">2</span><h3>Ετοίμασε 5 καλώδια</h3><label class="done no-print"><input type="checkbox" id="step-2" data-step="2">Έγινε</label></div>
+      <figure>
+        <svg class="fig-svg wide" viewBox="0 0 360 100" role="img" aria-label="Η άκρη ενός καλωδίου: μετά τη μόνωση, 3 χιλιοστά γυμνός χαλκός, στριμμένος και γανωμένος.">
+<rect x="236" y="41.5" width="60" height="11" rx="3" class="s-solder"/>
+<line x1="254" y1="42.5" x2="250" y2="51.5" class="s-twist"/>
+<line x1="261" y1="42.5" x2="257" y2="51.5" class="s-twist"/>
+<line x1="268" y1="42.5" x2="264" y2="51.5" class="s-twist"/>
+<line x1="275" y1="42.5" x2="271" y2="51.5" class="s-twist"/>
+<line x1="282" y1="42.5" x2="278" y2="51.5" class="s-twist"/>
+<line x1="289" y1="42.5" x2="285" y2="51.5" class="s-twist"/>
+<rect x="16" y="38" width="232" height="18" rx="9" class="f-red"/>
+<line x1="248" y1="74" x2="296" y2="74" class="s-dim"/><line x1="248" y1="68" x2="248" y2="80" class="s-dim"/><line x1="296" y1="68" x2="296" y2="80" class="s-dim"/>
+<text x="272" y="94" class="t-label t-mid">3 χιλ.</text>
+<text x="24" y="28" class="t-label">μόνωση</text>
+<text x="340" y="28" class="t-label t-end">στριμμένο και γανωμένο</text>
+</svg>
+        <figcaption>Κάθε άκρη: 3 χιλ. γυμνός χαλκός, στριμμένος και γανωμένος.</figcaption>
+      </figure>
+      <ul class="list">
+        <li>Διάλεξε 5 καλωδιάκια με τα χρώματα του πίνακα και κόψε τα πλαστικά βυσματάκια και από τις δύο άκρες.</li>
+        <li>Από το καθένα κόψε ένα κομμάτι <b>8 εκ.</b> Καλύτερα να περισσεύει: το υπόλοιπο διπλώνεται στο τέλος.</li>
+        <li>Απογύμνωσε <b>3 χιλ.</b> σε κάθε άκρη. Χωρίς απογυμνωτή: χάραξε απαλά τη μόνωση γύρω-γύρω με τον κόφτη, χωρίς να κόψεις τον χαλκό, και τράβα τη.</li>
+        <li>Στρίψε τους λεπτούς κλώνους μεταξύ τους. Ένας ξεχασμένος κλώνος μπορεί να ακουμπήσει τη διπλανή τρύπα.</li>
+        <li>Γάνωσε κάθε άκρη: ακούμπησε τη μύτη και λιώσε πάνω της λίγο καλάι, να γίνει ένα στερεό ασημί μυτάκι. Λίγο φτάνει, αλλιώς δεν χωράει στην τρύπα.</li>
+      </ul>
+      <p class="small muted">Αν ο χαλκός μέσα είναι γκρίζος και δεν πιάνει καλάι ούτε με flux, το σύρμα είναι αλουμίνιο. Πάρε σύρμα από ένα παλιό καλώδιο USB.</p>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">3</span><h3>Εξάσκηση, 5 λεπτά</h3><label class="done no-print"><input type="checkbox" id="step-3" data-step="3">Έγινε</label></div>
+      <ul class="list">
+        <li>Από ένα καλωδιάκιο που περισσεύει φτιάξε δύο κομμάτια με γανωμένες άκρες.</li>
+        <li>Βάλε τις άκρες τη μία δίπλα στην άλλη, στερεωμένες με χαρτοταινία, και κόλλησέ τες με τις 6 κινήσεις.</li>
+        <li>Όταν η κόλληση βγαίνει γυαλιστερή και δεν ανοίγει όταν την τραβάς απαλά, προχώρα.</li>
+      </ul>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">4</span><h3>Κόλλησε τα καλώδια στον αισθητήρα</h3><label class="done no-print"><input type="checkbox" id="step-4" data-step="4">Έγινε</label></div>
+      <figure>
+        <svg class="fig-svg mid" viewBox="0 0 340 262" role="img" aria-label="Ο αισθητήρας GY-291 από πάνω. Οι 8 τρύπες από αριστερά: GND, VCC, CS, INT1, INT2, SDO, SDA, SCL. Καλώδια μπαίνουν στις GND (μαύρο, προς GND), VCC (κόκκινο, προς 3V3), INT1 (μπλε, προς 39), SDA (κίτρινο, προς 21) και SCL (πράσινο, προς 22). Οι CS, INT2 και SDO μένουν κενές.">
+<rect x="40" y="16" width="260" height="184" rx="8" class="s-gy"/>
+<circle cx="66" cy="42" r="9" class="s-mount"/><circle cx="274" cy="42" r="9" class="s-mount"/>
+<rect x="150" y="56" width="40" height="28" rx="2" class="s-chip"/>
+<text x="170" y="102" class="t-silk-c">ADXL345</text>
+<rect x="84" y="64" width="26" height="16" rx="2" class="s-chip"/>
+<rect x="222" y="62" width="16" height="8" rx="1.5" class="s-res"/><rect x="222" y="78" width="16" height="8" rx="1.5" class="s-res"/>
+<rect x="112" y="98" width="16" height="8" rx="1.5" class="s-res"/><rect x="214" y="98" width="16" height="8" rx="1.5" class="s-res"/>
+<circle cx="72" cy="168" r="7.5" class="s-pad"/><circle cx="72" cy="168" r="3.4" class="s-hole"/>
+<text x="75.5" y="154" transform="rotate(-90 75.5 154)" class="t-silk-v">GND</text>
+<circle cx="100" cy="168" r="7.5" class="s-pad"/><circle cx="100" cy="168" r="3.4" class="s-hole"/>
+<text x="103.5" y="154" transform="rotate(-90 103.5 154)" class="t-silk-v">VCC</text>
+<circle cx="128" cy="168" r="7.5" class="s-pad"/><circle cx="128" cy="168" r="3.4" class="s-hole"/>
+<text x="131.5" y="154" transform="rotate(-90 131.5 154)" class="t-silk-v">CS</text>
+<circle cx="156" cy="168" r="7.5" class="s-pad"/><circle cx="156" cy="168" r="3.4" class="s-hole"/>
+<text x="159.5" y="154" transform="rotate(-90 159.5 154)" class="t-silk-v">INT1</text>
+<circle cx="184" cy="168" r="7.5" class="s-pad"/><circle cx="184" cy="168" r="3.4" class="s-hole"/>
+<text x="187.5" y="154" transform="rotate(-90 187.5 154)" class="t-silk-v">INT2</text>
+<circle cx="212" cy="168" r="7.5" class="s-pad"/><circle cx="212" cy="168" r="3.4" class="s-hole"/>
+<text x="215.5" y="154" transform="rotate(-90 215.5 154)" class="t-silk-v">SDO</text>
+<circle cx="240" cy="168" r="7.5" class="s-pad"/><circle cx="240" cy="168" r="3.4" class="s-hole"/>
+<text x="243.5" y="154" transform="rotate(-90 243.5 154)" class="t-silk-v">SDA</text>
+<circle cx="268" cy="168" r="7.5" class="s-pad"/><circle cx="268" cy="168" r="3.4" class="s-hole"/>
+<text x="271.5" y="154" transform="rotate(-90 271.5 154)" class="t-silk-v">SCL</text>
+<line x1="72" y1="168" x2="72" y2="212" class="s-case"/>
+<line x1="72" y1="168" x2="72" y2="212" class="s-wire w-black"/>
+<text x="72" y="228" class="t-target">→GND</text>
+<line x1="100" y1="168" x2="100" y2="228" class="s-case"/>
+<line x1="100" y1="168" x2="100" y2="228" class="s-wire w-red"/>
+<text x="100" y="244" class="t-target">→3V3</text>
+<line x1="156" y1="168" x2="156" y2="212" class="s-case"/>
+<line x1="156" y1="168" x2="156" y2="212" class="s-wire w-blue"/>
+<text x="156" y="228" class="t-target">→39</text>
+<line x1="240" y1="168" x2="240" y2="212" class="s-case"/>
+<line x1="240" y1="168" x2="240" y2="212" class="s-wire w-yellow"/>
+<text x="240" y="228" class="t-target">→21</text>
+<line x1="268" y1="168" x2="268" y2="228" class="s-case"/>
+<line x1="268" y1="168" x2="268" y2="228" class="s-wire w-green"/>
+<text x="268" y="244" class="t-target">→22</text>
+<text x="128" y="216" class="t-ord">κενό</text>
+<text x="184" y="216" class="t-ord">κενό</text>
+<text x="212" y="216" class="t-ord">κενό</text>
+</svg>
+        <figcaption>Ο αισθητήρας από πάνω. Κάτω από κάθε καλώδιο γράφει σε ποια τρύπα της LilyGO πηγαίνει.</figcaption>
+      </figure>
+      <ul class="list">
+        <li>Βάλε το πλακετάκι με το τσιπάκι και τα γράμματα (GND, VCC…) προς τα πάνω. Αν ήρθε μαζί μια σειρά από ακίδες (pins), δεν τη χρειάζεσαι.</li>
+        <li>Κάνε με μαρκαδόρο μια τελεία δίπλα στις 5 τρύπες: GND, VCC, INT1, SDA, SCL. Οι CS, INT2 και SDO μένουν κενές.</li>
+        <li>Πέρασε κάθε καλώδιο από πάνω προς τα κάτω στη σωστή τρύπα, μέχρι να ακουμπήσει η μόνωση. Στερέωσέ τα με χαρτοταινία.</li>
+        <li>Γύρισε το πλακετάκι και κόλλησε από κάτω, ένα-ένα. Μετά κόψε τα σύρματα που εξέχουν, λίγο πάνω από την κόλληση.</li>
+        <li>Τα GND και VCC είναι δίπλα-δίπλα. Κοίτα με το ζουμ του κινητού ότι το καλάι δεν τα ένωσε.</li>
+      </ul>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">5</span><h3>Κόλλησε τα καλώδια στη LilyGO</h3><label class="done no-print"><input type="checkbox" id="step-5" data-step="5">Έγινε</label></div>
+      <figure>
+        <svg class="fig-svg tall" viewBox="0 0 360 572" role="img" aria-label="Η LilyGO από μπροστά, με το ESP32 πάνω. Η δεξιά σειρά έχει από πάνω προς τα κάτω: TX, RX, 3V3, GND, 22, 21, 23, 19, 18, 5, 39, 0, RST, GND, VBUS. Τα καλώδια μπαίνουν στην 3η τρύπα (3V3, κόκκινο), στην 4η (GND, μαύρο), στην 5η (22, πράσινο), στην 6η (21, κίτρινο) και στην 11η (39, μπλε).">
+<text x="20" y="18" class="t-note">↑ πάνω άκρη, με το ESP32</text>
+<rect x="16" y="28" width="208" height="540" rx="12" class="s-pcb"/>
+<rect x="46" y="34" width="92" height="42" rx="3" class="s-modpcb"/>
+<path d="M58 68V44H70V68H82V44H94V68H106V44H118V68H126" class="s-meander"/>
+<rect x="46" y="76" width="92" height="196" rx="4" class="s-shield"/>
+<text x="92" y="170" class="t-shield">ESP32</text>
+<text x="92" y="188" class="t-shield-s">WROVER</text>
+<circle cx="30" cy="60" r="5" class="s-pad dim"/>
+<circle cx="30" cy="90" r="5" class="s-pad dim"/>
+<circle cx="30" cy="120" r="5" class="s-pad dim"/>
+<circle cx="30" cy="150" r="5" class="s-pad dim"/>
+<circle cx="30" cy="180" r="5" class="s-pad dim"/>
+<circle cx="30" cy="210" r="5" class="s-pad dim"/>
+<circle cx="30" cy="240" r="5" class="s-pad dim"/>
+<circle cx="30" cy="270" r="5" class="s-pad dim"/>
+<circle cx="30" cy="300" r="5" class="s-pad dim"/>
+<circle cx="30" cy="330" r="5" class="s-pad dim"/>
+<circle cx="30" cy="360" r="5" class="s-pad dim"/>
+<circle cx="30" cy="390" r="5" class="s-pad dim"/>
+<circle cx="30" cy="420" r="5" class="s-pad dim"/>
+<circle cx="30" cy="450" r="5" class="s-pad dim"/>
+<circle cx="30" cy="480" r="5" class="s-pad dim"/>
+<circle cx="200" cy="60" r="7.5" class="s-pad"/><circle cx="200" cy="60" r="3.4" class="s-hole"/>
+<text x="200" y="48.5" class="t-silk">TX</text>
+<circle cx="200" cy="90" r="7.5" class="s-pad"/><circle cx="200" cy="90" r="3.4" class="s-hole"/>
+<text x="200" y="78.5" class="t-silk">RX</text>
+<circle cx="200" cy="120" r="7.5" class="s-pad"/><circle cx="200" cy="120" r="3.4" class="s-hole"/>
+<text x="200" y="108.5" class="t-silk">3V3</text>
+<circle cx="200" cy="150" r="7.5" class="s-pad"/><circle cx="200" cy="150" r="3.4" class="s-hole"/>
+<text x="200" y="138.5" class="t-silk">GND</text>
+<circle cx="200" cy="180" r="7.5" class="s-pad"/><circle cx="200" cy="180" r="3.4" class="s-hole"/>
+<text x="200" y="168.5" class="t-silk">22</text>
+<text x="186" y="183.5" class="t-silk-s">SCL</text>
+<circle cx="200" cy="210" r="7.5" class="s-pad"/><circle cx="200" cy="210" r="3.4" class="s-hole"/>
+<text x="200" y="198.5" class="t-silk">21</text>
+<text x="186" y="213.5" class="t-silk-s">SDA</text>
+<circle cx="200" cy="240" r="7.5" class="s-pad"/><circle cx="200" cy="240" r="3.4" class="s-hole"/>
+<text x="200" y="228.5" class="t-silk">23</text>
+<text x="186" y="243.5" class="t-silk-s">MOSI</text>
+<circle cx="200" cy="270" r="7.5" class="s-pad"/><circle cx="200" cy="270" r="3.4" class="s-hole"/>
+<text x="200" y="258.5" class="t-silk">19</text>
+<text x="186" y="273.5" class="t-silk-s">MISO</text>
+<circle cx="200" cy="300" r="7.5" class="s-pad"/><circle cx="200" cy="300" r="3.4" class="s-hole"/>
+<text x="200" y="288.5" class="t-silk">18</text>
+<text x="186" y="303.5" class="t-silk-s">SCLK</text>
+<circle cx="200" cy="330" r="7.5" class="s-pad"/><circle cx="200" cy="330" r="3.4" class="s-hole"/>
+<text x="200" y="318.5" class="t-silk">5</text>
+<text x="186" y="333.5" class="t-silk-s">CS</text>
+<circle cx="200" cy="360" r="7.5" class="s-pad"/><circle cx="200" cy="360" r="3.4" class="s-hole"/>
+<text x="200" y="348.5" class="t-silk">39</text>
+<circle cx="200" cy="390" r="7.5" class="s-pad"/><circle cx="200" cy="390" r="3.4" class="s-hole"/>
+<text x="200" y="378.5" class="t-silk">0</text>
+<circle cx="200" cy="420" r="7.5" class="s-pad"/><circle cx="200" cy="420" r="3.4" class="s-hole"/>
+<text x="200" y="408.5" class="t-silk">RST</text>
+<circle cx="200" cy="450" r="7.5" class="s-pad"/><circle cx="200" cy="450" r="3.4" class="s-hole"/>
+<text x="200" y="438.5" class="t-silk">GND</text>
+<circle cx="200" cy="480" r="7.5" class="s-pad"/><circle cx="200" cy="480" r="3.4" class="s-hole"/>
+<text x="200" y="468.5" class="t-silk">VBUS</text>
+<rect x="194" y="500" width="36" height="20" rx="7" class="s-usb"/>
+<text x="240" y="514" class="t-note">USB-C</text>
+<line x1="200" y1="120" x2="262" y2="120" class="s-case"/>
+<line x1="200" y1="120" x2="262" y2="120" class="s-wire w-red"/>
+<text x="270" y="124" class="t-tag">3η · κόκκινο</text>
+<line x1="200" y1="150" x2="262" y2="150" class="s-case"/>
+<line x1="200" y1="150" x2="262" y2="150" class="s-wire w-black"/>
+<text x="270" y="154" class="t-tag">4η · μαύρο</text>
+<line x1="200" y1="180" x2="262" y2="180" class="s-case"/>
+<line x1="200" y1="180" x2="262" y2="180" class="s-wire w-green"/>
+<text x="270" y="184" class="t-tag">5η · πράσινο</text>
+<line x1="200" y1="210" x2="262" y2="210" class="s-case"/>
+<line x1="200" y1="210" x2="262" y2="210" class="s-wire w-yellow"/>
+<text x="270" y="214" class="t-tag">6η · κίτρινο</text>
+<line x1="200" y1="360" x2="262" y2="360" class="s-case"/>
+<line x1="200" y1="360" x2="262" y2="360" class="s-wire w-blue"/>
+<text x="270" y="364" class="t-tag">11η · μπλε</text>
+<text x="240" y="63.5" class="t-ord">1</text>
+<text x="240" y="93.5" class="t-ord">2</text>
+<text x="240" y="243.5" class="t-ord">7</text>
+<text x="240" y="273.5" class="t-ord">8</text>
+<text x="240" y="303.5" class="t-ord">9</text>
+<text x="240" y="333.5" class="t-ord">10</text>
+<text x="240" y="393.5" class="t-ord">12</text>
+<text x="240" y="423.5" class="t-ord">13</text>
+<text x="240" y="453.5" class="t-ord">14</text>
+<text x="240" y="483.5" class="t-ord">15</text>
+<path d="M8 538L24 530L40 542L56 530L72 542L88 530L104 542L120 530L136 542L152 530L168 542L184 530L200 542L216 530L232 542V572H8Z" class="s-tear"/>
+<text x="20" y="566" class="t-note">↓ πιο κάτω: κάρτα SIM, SIM7600, κεραίες</text>
+</svg>
+        <figcaption>Η LilyGO από μπροστά, με το ESP32 πάνω. Στην πλακέτα ο αριθμός κάθε τρύπας είναι τυπωμένος ακριβώς από πάνω της, όπως στο σχέδιο.</figcaption>
+      </figure>
+      <ul class="list">
+        <li>Κράτα την πλακέτα από τη μπροστινή πλευρά, αυτή με το ESP32 και τον SIM7600, με το ESP32 προς τα πάνω. Δουλεύεις στη σειρά τρυπών στα <b>δεξιά</b>.</li>
+        <li>Μέτρα τις τρύπες από πάνω: <b>3η</b> = 3V3, <b>4η</b> = GND, <b>5η</b> = 22, <b>6η</b> = 21, <b>11η</b> = 39. Δίπλα στο 22 γράφει και SCL, δίπλα στο 21 γράφει SDA.</li>
+        <li>Αν η δική σου πλακέτα γράφει κάτι άλλο, σταμάτα και στείλε μου φωτογραφία.</li>
+        <li>Πέρασε τα καλώδια από μπροστά προς τα πίσω και κράτα τα με χαρτοταινία. Έλεγξε ξανά χρώμα και τρύπα πριν ζεστάνεις.</li>
+        <li>Γύρισε την πλακέτα και κόλλησε από πίσω. Η θήκη της μπαταρίας είναι λίγα χιλιοστά δίπλα: κράτα τη μύτη μακριά από το πλαστικό της.</li>
+        <li>Ξεκίνα από την 39, που είναι μόνη της, μετά 21, 22, GND και τελευταία 3V3. Κόψε ό,τι εξέχει.</li>
+      </ul>
+      <div class="callout bad">
+        <p class="callout-title">Οι 3V3 και GND είναι δίπλα-δίπλα</p>
+        <p>Αν τις ενώσει καλάι, γίνεται βραχυκύκλωμα. Βάλε λίγο καλάι και κοίτα με το ζουμ.</p>
+      </div>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">6</span><h3>Έλεγχος, πριν μπει η μπαταρία</h3><label class="done no-print"><input type="checkbox" id="step-6" data-step="6">Έγινε</label></div>
+      <p>Κοίτα κάθε κόλληση με το ζουμ του κινητού: γυαλιστερή, σαν ηφαίστειο, χωρίς γέφυρες και χωρίς ελεύθερους κλώνους. Μετά, με το πολύμετρο στο «μπιπ»:</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Ακουμπάς τις δύο ακίδες</th><th>Σωστό</th></tr></thead>
+          <tbody>
+            <tr><td>Στις δύο άκρες κάθε καλωδίου: VCC με 3V3, GND με GND, SDA με 21, SCL με 22, INT1 με 39</td><td class="yes">μπιπ</td></tr>
+            <tr><td>Στις 3V3 και GND της LilyGO. Ένα σύντομο «τσιπ» στην αρχή είναι φυσιολογικό.</td><td class="no">χωρίς μπιπ</td></tr>
+            <tr><td>Σε διπλανές τρύπες: 21 με 22, 22 με GND, 39 με 5, 39 με 0</td><td class="no">χωρίς μπιπ</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Αν βρεις μπιπ ανάμεσα σε 3V3 και GND, μην προχωρήσεις. Δες το «Αν κάτι πάει στραβά».</p>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">7</span><h3>Στερέωσε τον αισθητήρα και τα καλώδια</h3><label class="done no-print"><input type="checkbox" id="step-7" data-step="7">Έγινε</label></div>
+      <ul class="list">
+        <li>Ο αισθητήρας πρέπει να είναι <b>ακίνητος</b> πάνω στην πλακέτα. Αν κρέμεται από τα καλώδια, θα «βλέπει» κίνηση που δεν υπάρχει.</li>
+        <li>Κόλλησέ τον με διπλή ταινία αφρού πάνω στο ασημί κουτάκι του ESP32. Μην καλύψεις την πάνω άκρη του ESP32: εκεί είναι η κεραία του Wi-Fi. Η ταινία μονώνει τον αισθητήρα από το μέταλλο.</li>
+        <li>Δεν έχει σημασία αν θα μπει ίσιος ή στραβός: το πρόγραμμα μετράει πόσο αλλάζει η κλίση από τη στιγμή που παρκάρεις.</li>
+        <li>Δίπλωσε το καλώδιο που περισσεύει και κράτα το με λίγη θερμόκολλα ή μονωτική ταινία κοντά στις κολλήσεις, για να μη λυγίζουν από τους κραδασμούς.</li>
+        <li>Το μεγάλο θερμοσυστελλόμενο μπαίνει στο τέλος, αφού δοκιμάσουμε τα πάντα. Τότε θα σου γράψω πώς γίνεται με ασφάλεια, γιατί μέσα θα είναι η μπαταρία.</li>
+      </ul>
+    </li>
+    <li class="step">
+      <div class="step-head"><span class="step-num">8</span><h3>Πρώτο άναμμα, μαζί μου</h3><label class="done no-print"><input type="checkbox" id="step-8" data-step="8">Έγινε</label></div>
+      <ul class="list">
+        <li>Κούμπωσε τις κεραίες: της 4G στην υποδοχή που γράφει MAIN και του GPS, το τετράγωνο κεραμικό κομμάτι, στην υποδοχή GPS ή GNSS. Την AUX την αφήνεις κενή. Πίεσε ίσια προς τα κάτω μέχρι το «κλικ». Μην ανάψεις την πλακέτα χωρίς την κεραία 4G.</li>
+        <li>Βάλε τη μπαταρία με το + της στο + της θήκης. Αν μπει ανάποδα, χαλάει η πλακέτα.</li>
+        <li>Βάλε τον διακόπτη στο ON. Αν δεν ανάψει κανένα λαμπάκι, πάτα μία φορά το κουμπί PWR.</li>
+        <li>Σύνδεσε την πλακέτα στον υπολογιστή με καλώδιο USB-A σε USB-C. Καλώδιο με USB-C και στις δύο άκρες δεν δουλεύει. Αν η πλακέτα έχει δύο υποδοχές USB-C, βάλε το σε αυτή που γράφει TTL.</li>
+        <li>Πες μου στη συνομιλία. Θα ανεβάσω εγώ το πρόγραμμα και θα δούμε στα μηνύματά του αν βρήκε τον αισθητήρα.</li>
+        <li>Τον μικρό διακόπτη με τα 4 ποδαράκια στην πίσω πλευρά άφησέ τον όπως ήρθε.</li>
+        <li>Η κάρτα SIM (nano) μπαίνει με την πλακέτα σβηστή, αφού της βγάλεις το PIN από ένα κινητό.</li>
+      </ul>
+    </li>
+  </ol>
+</section>
+
+<section id="pyknotis" aria-labelledby="h-cap">
+  <h2 id="h-cap">Πυκνωτής για τη μπαταρία (αν χρειαστεί)</h2>
+  <p>Όταν το modem εκπέμπει, ζητάει για μια στιγμή πολύ ρεύμα. Με τη μπαταρία μόνη της, η τάση έπεφτε τόσο που η πλακέτα έκανε επανεκκίνηση ή η προστασία της μπαταρίας την έσβηνε εντελώς, μέχρι να ανοιγοκλείσεις τον διακόπτη. Από το πρόγραμμα 1.4.2 το modem μένει μόνο στο 4G, που ζητάει πολύ λιγότερο ρεύμα. Αν στην εφαρμογή ξαναδείς «Η πλακέτα ξεκίνησε από την αρχή: έπεσε η τάση» ή «ήρθε ρεύμα» χωρίς να το κάνεις εσύ, κόλλησε αυτόν τον πυκνωτή. Δίνει αμέσως το ρεύμα που ζητάει το modem, και η τάση δεν πέφτει.</p>
+  <div class="two">
+    <div class="panel">
+      <h3>Τι θέλεις</h3>
+      <ul class="list">
+        <li><b>Ηλεκτρολυτικός πυκνωτής 1000 µF, 16 V</b> (ή 10 V, ή 2200 µF). Αν γράφει «low ESR», ακόμα καλύτερα. Κοστίζει λίγα λεπτά σε κάθε μαγαζί ηλεκτρονικών. Πάρε δύο.</li>
+        <li>Δύο κομματάκια σύρμα, το πολύ 5 εκ. το καθένα, αν τα ποδαράκια του πυκνωτή δεν φτάνουν.</li>
+        <li>Λίγο θερμοσυστελλόμενο ή μονωτική ταινία για τα ποδαράκια.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Πού πάει</h3>
+      <ul class="list">
+        <li><b>+ (μακρύ ποδαράκι)</b> → στην τρύπα <b>VBAT</b> της <b>αριστερής</b> σειράς. Στο σχέδιο της LilyGO είναι στην πάνω άκρη, ακριβώς κάτω από την 3V3 (2η τρύπα από πάνω).</li>
+        <li><b>− (πλευρά με τη λωρίδα)</b> → σε μια τρύπα <b>GND</b>. Η δεξιά σειρά έχει μία ελεύθερη, τη 14η από πάνω, ακριβώς πάνω από τη VBUS.</li>
+        <li>Η VBAT είναι μετά τον διακόπτη και την προστασία της μπαταρίας. Μη βάλεις τον πυκνωτή πάνω στη θήκη της μπαταρίας: εκεί δεν βοηθάει.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout bad" role="note">
+    <p class="callout-title">Πρώτα φωτογραφία, μετά κόλληση</p>
+    <p>Δες τα γράμματα δίπλα στις τρύπες της αριστερής σειράς και στείλε μου φωτογραφία πριν κολλήσεις. Αν η τρύπα δεν γράφει VBAT (ή BAT), μην κολλήσεις: θα σου πω ποια είναι η σωστή. Ο πυκνωτής έχει φορά: ανάποδα μπορεί να φουσκώσει ή να σκάσει.</p>
+  </div>
+  <ol class="list">
+    <li>Βγάλε τη μπαταρία και το USB.</li>
+    <li>Μέτρα με το πολύμετρο σε «μπιπ» ότι η τρύπα VBAT και η GND <b>δεν</b> κάνουν μπιπ μεταξύ τους.</li>
+    <li>Κόλλησε το μακρύ ποδαράκι (+) στη VBAT και το άλλο (−) στη GND, κατευθείαν ή με τα δύο σύρματα. Μόνωσε τα ποδαράκια ώστε να μην ακουμπάνε τίποτα άλλο.</li>
+    <li>Στερέωσε τον πυκνωτή με λίγη θερμόκολλα, για να μην τον σπάσουν οι κραδασμοί.</li>
+    <li>Ξαναμέτρα VBAT και GND: ένα σύντομο «τσιπ» στην αρχή είναι φυσιολογικό (γεμίζει ο πυκνωτής από το πολύμετρο). Συνεχόμενο μπιπ σημαίνει γέφυρα: μη βάλεις μπαταρία.</li>
+    <li>Βάλε τη μπαταρία και άνοιξε τον διακόπτη. Αν δεν ανάψει, σύνδεσε μία φορά το USB: η προστασία της μπαταρίας μπορεί να «τρομάξει» από το πρώτο γέμισμα του πυκνωτή, και το USB την ξεκλειδώνει.</li>
+  </ol>
+</section>
+
+<section aria-labelledby="h-faults">
+  <h2 id="h-faults">Αν κάτι πάει στραβά</h2>
+  <dl class="faults">
+    <div><dt>Το καλάι κάνει μπάλα και δεν απλώνει</dt><dd>Η μύτη είναι βρόμικη ή κρύα. Καθάρισέ τη, λιώσε πάνω της φρέσκο καλάι, βάλε flux και ανέβασε τη θερμοκρασία κατά 20 °C.</dd></div>
+    <div><dt>Το σύρμα δεν πιάνει καλάι</dt><dd>Βάλε flux. Αν πάλι δεν πιάνει, είναι αλουμίνιο: χρησιμοποίησε σύρμα από ένα παλιό καλώδιο USB.</dd></div>
+    <div><dt>Ενώθηκαν δύο διπλανές τρύπες</dt><dd>Καθάρισε τη μύτη, ζέστανε τη γέφυρα και σύρε τη μύτη προς τα έξω. Το περίσσιο καλάι έρχεται μαζί. Αλλιώς ακούμπησε φυτίλι αποκόλλησης πάνω στη γέφυρα και ζέστανέ το: ρουφάει το καλάι.</dd></div>
+    <div><dt>Ένα καλώδιο μπήκε σε λάθος τρύπα</dt><dd>Ζέστανε την κόλληση και τράβα απαλά το σύρμα με μια τσιμπίδα. Μάζεψε το καλάι από την τρύπα με το φυτίλι και κόλλησε στη σωστή.</dd></div>
+    <div><dt>Σηκώθηκε το χάλκινο δαχτυλίδι (pad)</dt><dd>Σταμάτα και στείλε μου φωτογραφία. Σχεδόν πάντα υπάρχει λύση: 3V3 και GND υπάρχουν και σε άλλες τρύπες, και για τα 21, 22 και 39 μπορώ να αλλάξω pin στο πρόγραμμα.</dd></div>
+    <div><dt>Το πολύμετρο κάνει μπιπ στα 3V3 και GND</dt><dd>Μη βάλεις μπαταρία. Ψάξε γέφυρα με το ζουμ, πρώτα στην 3η και 4η τρύπα της LilyGO και στα GND και VCC του αισθητήρα.</dd></div>
+    <div><dt>Το πρόγραμμα δεν βρίσκει τον αισθητήρα</dt><dd>Ελέγχουμε με το πολύμετρο τα 5 καλώδια, και ότι το 21 πάει στο SDA και το 22 στο SCL, γιατί μπερδεύονται εύκολα. Αν είναι όλα σωστά, κάνουμε μια μικρή γέφυρα από καλάι ανάμεσα στο VCC και στο CS του αισθητήρα, που είναι δίπλα-δίπλα.</dd></div>
+  </dl>
+</section>
+
+<section aria-labelledby="h-shop">
+  <h2 id="h-shop">Για τον τεχνικό</h2>
+  <div class="tech">
+<pre id="tech-text">Συναγερμός μηχανής: κόλληση αισθητήρα κίνησης
+Αισθητήρας ADXL345 (πλακετάκι GY-291) πάνω σε LilyGO T-SIM7600 (ESP32), δεξιά σειρά pins.
+5 καλώδια περίπου 8 εκ., κολλημένα απευθείας στις τρύπες, χωρίς ακίδες:
+  VCC  → 3V3
+  GND  → GND
+  SDA  → IO21
+  SCL  → IO22
+  INT1 → IO39
+CS, INT2, SDO χωρίς σύνδεση (το GY-291 έχει δικές του αντιστάσεις).
+Η μπαταρία 18650 έξω από τη θήκη όσο γίνεται η δουλειά.
+Στο τέλος: έλεγχος ότι δεν υπάρχει βραχυκύκλωμα ανάμεσα σε 3V3 και GND.
+
+Αν χρειαστεί, για τις πτώσεις τάσης του modem στη μπαταρία:
+ηλεκτρολυτικός 1000 µF / 16 V (low ESR αν υπάρχει) ανάμεσα σε VBAT (+, αριστερή σειρά)
+και GND (−), με κοντά καλώδια. Όχι πάνω στη θήκη της 18650.</pre>
+    <div class="tools-row no-print">
+      <button id="copy-tech" type="button">Αντιγραφή κειμένου</button>
+      <span id="copy-msg" class="small muted" role="status"></span>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="h-src">
+  <h2 id="h-src">Από πού είναι τα στοιχεία</h2>
+  <ul class="sources">
+    <li><a href="https://lilygo.cc/products/t-sim7600" target="_blank" rel="noopener">LilyGO: σελίδα της T-SIM7600, με το σχέδιο των pins</a></li>
+    <li><a href="https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/main/docs/en/esp32/sim7600-esp32/README.MD" target="_blank" rel="noopener">LilyGO: οδηγός της T-SIM7600X με ESP32 (pins, κεραίες, τροφοδοσία)</a></li>
+    <li><a href="https://docs.sunfounder.com/projects/sf-components/en/latest/modules/module_adxl345.html" target="_blank" rel="noopener">SunFounder: σχηματικό του πλακετακιού ADXL345 (GY-291)</a></li>
+    <li><a href="https://github.com/Xinyuan-LilyGO/LilyGo-Modem-Series/blob/main/schematic/esp32/T-SIM7600X-V1.3.pdf" target="_blank" rel="noopener">LilyGO: σχηματικό της T-SIM7600X V1.3 (προστασία μπαταρίας DW06D, V_BAT στη σειρά pins)</a></li>
+    <li><a href="https://www.waveshare.com/wiki/SIM7600X_4G_&amp;_LTE_Cat-1_HAT" target="_blank" rel="noopener">Waveshare: η δική τους πλακέτα SIM7600 έχει γι' αυτό πυκνωτή 330 µF</a></li>
+  </ul>
+</section>
+
+<footer>Για το project hornet-alarm · 18 Νοεμβρίου 2026 · πυκνωτής: 19 Νοεμβρίου 2026</footer>
+</div>
+
+<script>
+(function () {
+  var KEY = 'hornet-soldering-steps-v1';
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('input[data-step]'));
+  var countEl = document.getElementById('done-count');
+  var bar = document.getElementById('progress-bar');
+
+  function render() {
+    var n = 0;
+    boxes.forEach(function (b) {
+      b.closest('.step').classList.toggle('is-done', b.checked);
+      if (b.checked) n++;
+    });
+    countEl.textContent = String(n);
+    bar.style.width = (n / boxes.length) * 100 + '%';
+  }
+  function store() {
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* the ticks just won't be remembered */ }
+  }
+  boxes.forEach(function (b) {
+    b.checked = !!saved[b.dataset.step];
+    b.addEventListener('change', function () { saved[b.dataset.step] = b.checked; store(); render(); });
+  });
+  document.getElementById('reset-steps').addEventListener('click', function () {
+    saved = {};
+    boxes.forEach(function (b) { b.checked = false; });
+    try { localStorage.removeItem(KEY); } catch (e) { /* nothing stored */ }
+    render();
+  });
+  render();
+
+  // Keep the screen on while the phone sits on the bench.
+  var wakeBtn = document.getElementById('wake');
+  var wakeMsg = document.getElementById('wake-msg');
+  var wanted = false;
+  var lock = null;
+  function showWake() {
+    wakeBtn.setAttribute('aria-pressed', wanted ? 'true' : 'false');
+    wakeBtn.textContent = wanted ? 'Η οθόνη μένει αναμμένη' : 'Κράτα την οθόνη αναμμένη';
+  }
+  function acquire() {
+    if (!('wakeLock' in navigator)) return Promise.reject(new Error('unsupported'));
+    return navigator.wakeLock.request('screen').then(function (l) {
+      lock = l;
+      lock.addEventListener('release', function () { lock = null; });
+    });
+  }
+  wakeBtn.addEventListener('click', function () {
+    if (wanted) {
+      wanted = false;
+      if (lock) lock.release().catch(function () {});
+      lock = null;
+      wakeMsg.textContent = '';
+      showWake();
+      return;
+    }
+    acquire().then(function () {
+      wanted = true;
+      wakeMsg.textContent = '';
+      showWake();
+    }, function () {
+      wanted = false;
+      wakeMsg.textContent = 'Εδώ δεν γίνεται. Μεγάλωσε για λίγο τον χρόνο αυτόματου κλειδώματος στις ρυθμίσεις του κινητού.';
+      showWake();
+    });
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (wanted && !lock && document.visibilityState === 'visible') acquire().catch(function () {});
+  });
+
+  // Copy the card for the repair shop.
+  var copyBtn = document.getElementById('copy-tech');
+  var copyMsg = document.getElementById('copy-msg');
+  var techText = document.getElementById('tech-text');
+  function selectText() {
+    var range = document.createRange();
+    range.selectNodeContents(techText);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    copyMsg.textContent = 'Το κείμενο επιλέχθηκε: αντέγραψέ το από το μενού.';
+  }
+  copyBtn.addEventListener('click', function () {
+    var text = techText.textContent;
+    try {
+      navigator.clipboard.writeText(text).then(function () {
+        copyMsg.textContent = 'Αντιγράφηκε.';
+      }, selectText);
+    } catch (e) {
+      selectText();
+    }
+  });
+})();
+</script>

@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f17">
+  <meta name="description" content="Συναγερμός, θέση και διαδρομές για τη μηχανή.">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Hornet">
+  <title>Συναγερμός Hornet</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <section id="login-view" class="login" hidden>
+    <form id="login-form" class="card login-card">
+      <img src="icons/icon.svg" alt="" width="64" height="64">
+      <h1>Συναγερμός Hornet</h1>
+      <!-- Lets iPhone/Android save the password and fill it in with Face ID next time. -->
+      <input class="visually-hidden" name="username" type="text" value="hornet" autocomplete="username" tabindex="-1" aria-hidden="true" readonly>
+      <label>Κωδικός
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="primary">Σύνδεση</button>
+      <p id="login-msg" class="muted" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <div id="main-view" hidden>
+    <div class="top">
+      <header class="topbar">
+        <div class="title">
+          <h1>Hornet 750</h1>
+          <span id="conn" class="pill">…</span>
+        </div>
+        <button id="btn-settings" class="icon-btn" type="button" aria-label="Ρυθμίσεις">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.47.47 0 0 0-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
+        </button>
+      </header>
+      <div id="alarm-banner" class="alarm" role="alert" hidden>
+        <div class="alarm-text">
+          <strong>Συναγερμός</strong>
+          <span id="alarm-text"></span>
+        </div>
+        <div class="alarm-actions">
+          <button id="btn-ack" type="button">Το είδα</button>
+          <button id="btn-folder-alarm" type="button">Φάκελος κλοπής</button>
+          <button id="btn-disarm" type="button">Αφοπλισμός</button>
+        </div>
+      </div>
+      <div id="crash-banner" class="alarm" role="alert" hidden>
+        <div class="alarm-text">
+          <strong id="crash-title">Έπεσες;</strong>
+          <span id="crash-text"></span>
+        </div>
+        <div class="alarm-actions">
+          <button id="btn-crash-ok" type="button">Είμαι καλά</button>
+        </div>
+      </div>
+    </div>
+
+    <main>
+      <section class="map-wrap" aria-label="Χάρτης">
+        <div id="map"></div>
+        <div class="map-tools">
+          <button id="btn-follow" class="map-btn" type="button" aria-pressed="false" aria-label="Ακολούθησε τη μηχανή" title="Ακολούθησε τη μηχανή">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 4.5 20.29l.71.71L12 18l6.79 3 .71-.71z"/></svg>
+          </button>
+          <button id="btn-history" class="map-btn" type="button" aria-pressed="false" aria-label="Διαδρομές 24ώρου" title="Διαδρομές 24ώρου">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+          </button>
+          <button id="btn-recenter" class="map-btn" type="button" aria-label="Δείξε τη μηχανή στον χάρτη" title="Δείξε τη μηχανή">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.94 3A8.99 8.99 0 0 0 13 3.06V1h-2v2.06A8.99 8.99 0 0 0 3.06 11H1v2h2.06A8.99 8.99 0 0 0 11 20.94V23h2v-2.06A8.99 8.99 0 0 0 20.94 13H23v-2h-2.06zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+          </button>
+        </div>
+        <p id="map-empty" class="map-empty" hidden>Η συσκευή δεν έχει στείλει ακόμα θέση.</p>
+        <p id="map-note" class="map-empty" hidden></p>
+      </section>
+
+      <!-- On a phone the panel's parts are laid out around the map (see styles.css). -->
+      <div class="panel">
+        <section id="push-card" class="card notice" hidden>
+          <p id="push-text">Ενεργοποίησε τις ειδοποιήσεις για να μαθαίνεις αμέσως αν κάποιος πειράξει τη μηχανή.</p>
+          <button id="btn-push" type="button" class="primary">Ενεργοποίηση ειδοποιήσεων</button>
+        </section>
+
+        <section class="card status-card" aria-label="Κατάσταση">
+          <div class="status-row">
+            <span class="arm-icon" aria-hidden="true">
+              <svg class="icon-unlocked" viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z"/></svg>
+              <svg class="icon-locked" viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+            </span>
+            <div class="status-text">
+              <div id="arm-state" class="arm-state">—</div>
+              <div id="arm-sub" class="muted"></div>
+            </div>
+          </div>
+          <button id="btn-arm" class="btn-arm" type="button">Οπλισμός</button>
+          <dl class="stats">
+            <div><dt>Μπαταρία</dt><dd id="st-battery">—</dd><dd id="st-forecast" class="forecast" hidden></dd></div>
+            <div><dt>Σήμα</dt><dd id="st-signal">—</dd><dd id="st-net" class="forecast net" hidden></dd></div>
+            <div><dt>Επαφή</dt><dd id="st-seen">—</dd></div>
+          </dl>
+        </section>
+
+        <section id="loan-card" class="card loan-card" aria-label="Δανεική" hidden>
+          <div class="card-head">
+            <h2>Δανεική μηχανή</h2>
+            <button id="btn-loan-end" type="button" class="link-btn">Επέστρεψε</button>
+          </div>
+          <p id="loan-text"></p>
+          <p id="loan-limit" class="muted"></p>
+        </section>
+
+        <section id="ride-card" class="card ride-card" aria-label="Οδηγείς τώρα" hidden>
+          <div class="ride-head">
+            <h2>Οδηγείς τώρα</h2>
+            <span class="ride-speed"><strong id="ride-speed">—</strong> χλμ/ώ</span>
+          </div>
+          <dl class="stats ride-stats">
+            <div><dt>Απόσταση</dt><dd id="ride-km">—</dd></div>
+            <div><dt>Χρόνος</dt><dd id="ride-time">—</dd></div>
+            <div><dt>Μέση</dt><dd id="ride-avg">—</dd></div>
+            <div><dt>Μέγιστη</dt><dd id="ride-max">—</dd></div>
+          </dl>
+          <p id="ride-age" class="muted ride-age"></p>
+        </section>
+
+        <section class="actions" aria-label="Ενέργειες">
+          <button id="btn-locate" type="button" class="action">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 0 1 0-5 2.5 2.5 0 0 1 0 5z"/></svg>
+            <span>Πού είναι τώρα</span>
+          </button>
+          <a id="btn-navigate" class="button action" target="_blank" rel="noopener" aria-disabled="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M21.71 11.29l-9-9a.996.996 0 0 0-1.41 0l-9 9a.996.996 0 0 0 0 1.41l9 9c.39.39 1.02.39 1.41 0l9-9a.996.996 0 0 0 0-1.41zM14 14.5V12h-4v3H8v-4c0-.55.45-1 1-1h5V7.5l3.5 3.5-3.5 3.5z"/></svg>
+            <span>Οδηγίες</span>
+          </a>
+          <button id="btn-share" type="button" class="action" aria-pressed="false">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+            <span id="share-label">Κοινοποίηση</span>
+          </button>
+          <button id="btn-rides" type="button" class="action">
+            <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 4a9 9 0 0 0-7.8 13.5l1.7-1A7 7 0 0 1 5 13h2v-2H5.1a7 7 0 0 1 1.6-3.9l1.4 1.4 1.4-1.4-1.4-1.4A7 7 0 0 1 11 5.1V7h2V5.1a7 7 0 0 1 3.9 1.6l-4.2 4.2a2 2 0 1 0 1.4 1.4l4.2-4.2a7 7 0 0 1 1.6 3.9H17v2h2a7 7 0 0 1-.9 3.5l1.7 1A9 9 0 0 0 12 4z"/></svg>
+            <span>Διαδρομές</span>
+          </button>
+        </section>
+
+        <!-- Service book: what is due next, in one line. Opens the whole book. -->
+        <button id="btn-service" type="button" class="card service-row">
+          <span class="service-row-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/></svg>
+          </span>
+          <span class="service-row-text">
+            <strong>Σέρβις</strong>
+            <small id="service-line">Βιβλίο σέρβις της μηχανής</small>
+            <small id="service-line2" hidden></small>
+          </span>
+          <span class="chev" aria-hidden="true">›</span>
+        </button>
+
+        <section class="card history" aria-label="Ιστορικό">
+          <div class="card-head">
+            <h2>Ιστορικό</h2>
+            <button id="btn-events-more" type="button" class="link-btn" hidden>Όλα</button>
+          </div>
+          <ul id="events" class="events"></ul>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <dialog id="settings">
+    <form method="dialog" class="settings-form">
+      <div class="settings-head">
+        <button id="settings-back" type="button" class="back-btn" hidden>‹ Ρυθμίσεις</button>
+        <h2 id="settings-title">Ρυθμίσεις</h2>
+      </div>
+
+      <nav id="settings-menu" class="settings-menu" aria-label="Θέματα ρυθμίσεων">
+        <div class="menu-group">
+          <button type="button" class="menu-row" data-page="alarm">
+            <span class="menu-icon" aria-hidden="true">🏍️</span>
+            <span class="menu-text"><strong>Συναγερμός</strong><small id="sum-alarm"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="auto">
+            <span class="menu-icon" aria-hidden="true">🅿️</span>
+            <span class="menu-text"><strong>Αυτόματη όπλιση</strong><small id="sum-auto"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="menu-group">
+          <button type="button" class="menu-row" data-page="alerts">
+            <span class="menu-icon" aria-hidden="true">🔔</span>
+            <span class="menu-text"><strong>Ειδοποιήσεις</strong><small id="sum-alerts"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="pushover">
+            <span class="menu-icon" aria-hidden="true">📣</span>
+            <span class="menu-text"><strong>Δυνατός συναγερμός</strong><small id="sum-pushover"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="sms">
+            <span class="menu-icon" aria-hidden="true">💬</span>
+            <span class="menu-text"><strong>SMS</strong><small id="sum-sms"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="crash">
+            <span class="menu-icon" aria-hidden="true">🚑</span>
+            <span class="menu-text"><strong>Ατύχημα</strong><small id="sum-crash"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="menu-group">
+          <button type="button" class="menu-row" data-page="loan">
+            <span class="menu-icon" aria-hidden="true">🔧</span>
+            <span class="menu-text"><strong>Δανεική / συνεργείο</strong><small id="sum-loan"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="folder">
+            <span class="menu-icon" aria-hidden="true">📁</span>
+            <span class="menu-text"><strong>Φάκελος κλοπής</strong><small id="sum-folder">Στοιχεία, φωτογραφίες, σύνδεσμος</small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="morning">
+            <span class="menu-icon" aria-hidden="true">☀️</span>
+            <span class="menu-text"><strong>Πρωινή σύνοψη</strong><small id="sum-morning"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="menu-group">
+          <button type="button" class="menu-row" data-page="quick">
+            <span class="menu-icon" aria-hidden="true">📱</span>
+            <span class="menu-text"><strong>Κουμπιά και widget</strong><small id="sum-quick"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="map">
+            <span class="menu-icon" aria-hidden="true">🗺️</span>
+            <span class="menu-text"><strong>Χάρτης</strong><small id="sum-map"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="wifiloc">
+            <span class="menu-icon" aria-hidden="true">📍</span>
+            <span class="menu-text"><strong>Θέση χωρίς GPS</strong><small id="sum-wifiloc"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="wifi">
+            <span class="menu-icon" aria-hidden="true">📶</span>
+            <span class="menu-text"><strong>Wi-Fi της πλακέτας</strong><small id="sum-wifi"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="menu-group">
+          <button type="button" class="menu-row" data-page="signal">
+            <span class="menu-icon" aria-hidden="true">📶</span>
+            <span class="menu-text"><strong>Δοκιμή σήματος</strong><small id="sum-signal"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+        </div>
+        <div class="menu-group">
+          <button id="btn-logout" type="button" class="menu-row danger">Αποσύνδεση</button>
+        </div>
+        <p id="fw-line" class="muted fw-line" hidden></p>
+      </nav>
+
+      <section class="settings-page" data-page="alarm" hidden>
+        <label>Ευαισθησία στην κίνηση
+          <select id="set-sensitivity">
+            <option value="1">Χαμηλή</option>
+            <option value="2">Μεσαία (προτείνεται)</option>
+            <option value="3">Υψηλή</option>
+          </select>
+          <small class="muted">Χαμηλή σημαίνει λιγότερους ψεύτικους συναγερμούς. Η συσκευή την παίρνει στην επόμενη επικοινωνία της.</small>
+        </label>
+        <label class="check">
+          <input id="set-touch" type="checkbox">
+          <span>Ήσυχη ειδοποίηση για απλό ακούμπημα
+            <small class="muted">Όσο είναι οπλισμένος. Ο συναγερμός χτυπάει μόνο αν κουνήσουν τη μηχανή.</small></span>
+        </label>
+        <label>Απόσταση για «μετακινήθηκε»
+          <select id="set-radius">
+            <option value="30">30 μέτρα</option>
+            <option value="50">50 μέτρα (προτείνεται)</option>
+            <option value="100">100 μέτρα</option>
+            <option value="200">200 μέτρα</option>
+          </select>
+          <small class="muted">Δεύτερος έλεγχος με GPS, αν ο αισθητήρας δεν καταλάβει κάτι. Πολύ μικρή απόσταση φέρνει ψεύτικους συναγερμούς.</small>
+        </label>
+      </section>
+
+      <section class="settings-page" data-page="auto" hidden>
+        <label>Όταν παρκάρεις και είναι αφοπλισμένος
+          <select id="set-park">
+            <option value="remind">Να μου θυμίζει να τον οπλίσω</option>
+            <option value="arm">Να οπλίζει μόνος του</option>
+            <option value="none">Τίποτα</option>
+          </select>
+          <small class="muted">Η συσκευή καταλαβαίνει ότι πάρκαρες 3 λεπτά αφού σταματήσεις.</small>
+        </label>
+        <label class="check">
+          <input id="set-schedule" type="checkbox">
+          <span>Πρόγραμμα κάθε μέρα
+            <small class="muted">Αν οδηγείς την ώρα της όπλισης, οπλίζει μόλις παρκάρεις. Όσο χτυπάει ο συναγερμός, δεν αφοπλίζει.</small></span>
+        </label>
+        <div class="time-row">
+          <label>Όπλιση <input id="set-arm-time" type="time"></label>
+          <label>Αφόπλιση <input id="set-disarm-time" type="time"></label>
+        </div>
+        <small class="muted">Άφησε μια ώρα κενή αν δεν τη χρειάζεσαι.</small>
+      </section>
+
+      <section class="settings-page" data-page="alerts" hidden>
+        <p id="push-state" class="muted"></p>
+        <button id="btn-push-settings" type="button">Ενεργοποίηση ειδοποιήσεων</button>
+        <button id="btn-push-test" type="button">Δοκιμαστική ειδοποίηση</button>
+        <label class="check">
+          <input id="set-offline" type="checkbox">
+          <span>Ειδοποίηση αν η συσκευή σταματήσει να στέλνει
+            <small class="muted">Άναψέ το όταν σιγουρευτείς ότι πιάνει σήμα εκεί που παρκάρεις.</small></span>
+        </label>
+      </section>
+
+      <section class="settings-page" data-page="pushover" hidden>
+        <p class="muted">Με το Pushover ο συναγερμός χτυπάει και στο αθόρυβο, στην ένταση που ορίζεις, και ξαναχτυπάει κάθε λεπτό μέχρι να πατήσεις «Acknowledge» εκεί ή «Το είδα» εδώ.</p>
+        <p id="pushover-state"><strong>Ανενεργό</strong></p>
+        <label id="po-sound-row" hidden>Ήχος συναγερμού
+          <select id="po-sound"></select>
+          <small class="muted">Όσοι γράφουν «(long)» κρατάνε περισσότερο. Διάλεξε και πάτα «Δοκιμή». Αν ανεβάσεις δικό σου ήχο στο pushover.net (Your Custom Sounds), θα εμφανιστεί εδώ.</small>
+        </label>
+        <details>
+          <summary>Πώς το στήνεις</summary>
+          <ol>
+            <li>Κατέβασε την εφαρμογή <strong>Pushover</strong> και φτιάξε λογαριασμό. Έχει δωρεάν δοκιμή και μετά κοστίζει περίπου €5 μία φορά.</li>
+            <li>Στο Pushover πήγαινε στα <strong>Settings</strong>, άναψε τις <strong>Critical Alerts</strong> για Emergency priority, πάτα «Allow» και βάλε την ένταση στο τέρμα.</li>
+            <li>Στο <strong>pushover.net</strong>, με τον ίδιο λογαριασμό, αντέγραψε το <strong>Your User Key</strong>.</li>
+            <li>Εκεί πάτα <strong>Create an Application/API Token</strong>, γράψε «Hornet» και αντέγραψε το <strong>API Token</strong>.</li>
+            <li>Βάλε τα δύο εδώ κάτω και πάτα «Αποθήκευση».</li>
+          </ol>
+        </details>
+        <label>User Key <input id="po-user" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <label>API Token <input id="po-token" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div class="share-buttons">
+          <button id="btn-po-save" type="button" class="primary">Αποθήκευση</button>
+          <button id="btn-po-test" type="button">Δοκιμή</button>
+        </div>
+        <button id="btn-po-off" type="button" hidden>Απενεργοποίηση του Pushover</button>
+      </section>
+
+      <section class="settings-page" data-page="sms" hidden>
+        <p class="muted">Εφεδρεία, αν δεν σου φτάνει το Pushover. Η συσκευή σού στέλνει SMS με τη θέση της μηχανής, έως 3 για κάθε συναγερμό, μέχρι να πατήσεις «Το είδα». Η κάρτα έχει 50 SMS τον χρόνο και μετά €0,19 το καθένα.</p>
+        <label>Το κινητό σου
+          <input id="set-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="69xxxxxxxx">
+          <small class="muted">Άφησέ το κενό αν δεν θες SMS.</small>
+        </label>
+        <button id="btn-phone" type="button">Αποθήκευση αριθμού</button>
+        <details>
+          <summary>Να ακούγεται και στο αθόρυβο</summary>
+          <p class="muted">Αποθήκευσε τον αριθμό της κάρτας της συσκευής στις Επαφές, πάτα «Ήχος μηνύματος» και άναψε την «Παράκαμψη έκτακτης ανάγκης».</p>
+        </details>
+      </section>
+
+      <section class="settings-page" data-page="crash" hidden>
+        <p class="muted">Όταν οδηγείς αφοπλισμένος, η συσκευή καταλαβαίνει αν έπεσε η μηχανή: λίγο πριν πήγαινε πάνω από 20 χλμ/ώ, και τώρα είναι πεσμένη στο πλάι και ακίνητη για 10 δευτερόλεπτα. Τότε σου έρχεται δυνατή ειδοποίηση. Αν σε 90 δευτερόλεπτα δεν πατήσεις «Είμαι καλά» και δεν ξεκινήσεις ξανά, η συσκευή στέλνει SMS στην επαφή σου με το σημείο και με σύνδεσμο ζωντανής θέσης για 24 ώρες.</p>
+        <label class="check">
+          <input id="set-crash" type="checkbox">
+          <span>Ειδοποίηση επαφής σε πτώση</span>
+        </label>
+        <label>Το όνομά σου
+          <input id="set-crash-name" type="text" maxlength="20" autocomplete="given-name" placeholder="π.χ. Γιώργος">
+          <small class="muted">Το SMS έρχεται από τον αριθμό της κάρτας της συσκευής, οπότε γράφει το όνομά σου για να ξέρει η επαφή ποιος είναι.</small>
+        </label>
+        <label>Όνομα επαφής
+          <input id="set-crash-contact" type="text" maxlength="20" autocomplete="off" placeholder="π.χ. Μαρία">
+        </label>
+        <label>Κινητό επαφής
+          <input id="set-crash-phone" type="tel" inputmode="tel" autocomplete="off" placeholder="69xxxxxxxx">
+        </label>
+        <button id="btn-crash-save" type="button" class="primary">Αποθήκευση</button>
+        <p id="crash-hint" class="muted" hidden></p>
+        <details>
+          <summary>Δοκιμή</summary>
+          <p class="muted">Τρέχει όλη τη διαδικασία χωρίς να πέσει η μηχανή. Έρχεται η ειδοποίηση πτώσης, και αν δεν πατήσεις «Είμαι καλά» σε 90 δευτερόλεπτα, φεύγουν 3 SMS με την ένδειξη ΔΟΚΙΜΗ στο κινητό που γράφεις εδώ. Φεύγουν μόλις ξαναστείλει η συσκευή, που όταν είναι παρκαρισμένη γίνεται έως σε 15 λεπτά. Η κάρτα έχει 50 SMS τον χρόνο.</p>
+          <label>Κινητό για τη δοκιμή
+            <input id="set-crash-test-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="69xxxxxxxx">
+          </label>
+          <button id="btn-crash-test" type="button">Ξεκίνα δοκιμή</button>
+        </details>
+        <details>
+          <summary>Τι να ξέρεις</summary>
+          <p class="muted">Δεν αντικαθιστά το 112 και δεν καλεί ποτέ μόνη της: ειδοποιεί τον άνθρωπό σου, κι εκείνος αποφασίζει. Μπορεί να μην καταλάβει πτώση αν καταστραφεί η συσκευή, αν δεν υπάρχει καθόλου σήμα ή αν η μηχανή μείνει όρθια. Αν η συσκευή δεν βρίσκει τον server, στέλνει μόνη της SMS με τη θέση μετά από 2,5 λεπτά. Αν πατήσεις «Είμαι καλά» αφού έφυγε το SMS, φεύγει δεύτερο ότι είσαι καλά.</p>
+        </details>
+      </section>
+
+      <section class="settings-page" data-page="quick" hidden>
+        <p class="muted">Οπλίζεις και αφοπλίζεις από την αρχική οθόνη, χωρίς να ανοίξεις την εφαρμογή. Όποιος έχει αυτούς τους συνδέσμους μπορεί να το κάνει, οπότε κράτα τους για σένα.</p>
+        <button id="btn-quick" type="button">Φτιάξε συνδέσμους</button>
+        <p id="quick-msg" class="muted" aria-live="polite"></p>
+        <div id="quick-links" class="quick-links" hidden>
+          <div class="copy-row"><span>Οπλισμός</span><button type="button" data-copy="arm">Αντιγραφή</button></div>
+          <div class="copy-row"><span>Αφοπλισμός</span><button type="button" data-copy="disarm">Αντιγραφή</button></div>
+          <div class="copy-row"><span>Κατάσταση</span><button type="button" data-copy="status">Αντιγραφή</button></div>
+          <button id="btn-scriptable" type="button">Αντιγραφή script για το Scriptable</button>
+          <textarea id="quick-fallback" rows="3" readonly hidden aria-label="Κείμενο για αντιγραφή"></textarea>
+          <details>
+            <summary>Κουμπιά «Όπλισε» και «Αφόπλισε» (Συντομεύσεις)</summary>
+            <p class="muted">Τρέχουν χωρίς να ανοίξει καμία εφαρμογή. Βγαίνει μόνο ένα μικρό μήνυμα.</p>
+            <ol>
+              <li>Άνοιξε τις <strong>Συντομεύσεις</strong> και πάτα <strong>+</strong>.</li>
+              <li>Πρόσθεσε την ενέργεια <strong>«Λήψη περιεχομένων διεύθυνσης URL»</strong> και επικόλλησε τον σύνδεσμο «Οπλισμός».</li>
+              <li>Πάτα το βελάκι της ενέργειας και άλλαξε τη <strong>Μέθοδο σε POST</strong>.</li>
+              <li>Πρόσθεσε την ενέργεια <strong>«Εμφάνιση ειδοποίησης»</strong>. Θα σου δείχνει «Ο συναγερμός οπλίστηκε».</li>
+              <li>Ονόμασέ τη «Όπλισε». Κάνε το ίδιο με τον σύνδεσμο «Αφοπλισμός» για το «Αφόπλισε».</li>
+              <li>Στην αρχική οθόνη κράτα πατημένο, πάτα <strong>+</strong>, διάλεξε <strong>Συντομεύσεις</strong> και πρόσθεσε το widget με τις δύο.</li>
+              <li>Αν θες, βάλ' τες και στο <strong>Κέντρο ελέγχου</strong> ή στην <strong>οθόνη κλειδώματος</strong> (iOS 18). Δουλεύουν και με Siri: «Όπλισε».</li>
+            </ol>
+          </details>
+          <details>
+            <summary>Widget με χάρτη, μπαταρία και σήμα (Scriptable)</summary>
+            <ol>
+              <li>Πάτα «Αντιγραφή script για το Scriptable».</li>
+              <li>Άνοιξε το <strong>Scriptable</strong>, πάτα <strong>+</strong>, επικόλλησε και ονόμασέ το «Hornet».</li>
+              <li>Στην αρχική οθόνη κράτα πατημένο, πάτα <strong>+</strong>, διάλεξε <strong>Scriptable</strong> και βάλε το μεσαίο ή το μεγάλο widget για να έχει χάρτη.</li>
+              <li>Πάτα πάνω στο widget και στο <strong>Script</strong> διάλεξε «Hornet».</li>
+            </ol>
+            <p class="muted">Ανανεώνεται περίπου κάθε 15 λεπτά. Όταν το πατάς ανοίγει το Scriptable με μενού για όπλιση. Για ένα πάτημα χωρίς να ανοίγει τίποτα, βάλε δίπλα του τα κουμπιά των Συντομεύσεων.</p>
+          </details>
+          <button id="btn-quick-revoke" type="button">Σβήσε τους συνδέσμους</button>
+        </div>
+      </section>
+
+      <section class="settings-page" data-page="signal" hidden>
+        <p class="muted">Δείχνει αν η συσκευή πιάνει εκεί που παρκάρεις, πριν τη βάλεις στη μηχανή. Πάτα «Ξεκίνα», μετά άναψε ή κούνησε την πλακέτα και άφησέ τη εκεί. Για μία ώρα θα στέλνει κάθε 2 λεπτά σε ποιο δίκτυο είναι και πόσο δυνατά πιάνει.</p>
+        <p id="signal-status"><strong>Δεν τρέχει δοκιμή.</strong></p>
+        <button id="btn-signal-start" type="button" class="primary">Ξεκίνα δοκιμή (1 ώρα)</button>
+        <button id="btn-signal-stop" type="button" hidden>Σταμάτα τη δοκιμή</button>
+        <h3>Μετρήσεις</h3>
+        <ul id="signal-log" class="events"></ul>
+      </section>
+      <section class="settings-page" data-page="map" hidden>
+        <label>Εμφάνιση χάρτη
+          <select id="set-map">
+            <option value="light">Ανοιχτός (προτείνεται)</option>
+            <option value="dark">Σκούρος</option>
+            <option value="auto">Όπως το κινητό</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="settings-page" data-page="wifiloc" hidden>
+        <p class="muted">Όταν το GPS δεν βλέπει ουρανό, π.χ. σε γκαράζ ή μέσα σε φορτηγάκι, η συσκευή στέλνει τα Wi-Fi που ακούει γύρω της. Από αυτά βρίσκεται περίπου πού είναι η μηχανή. Στον χάρτη αυτή η θέση έχει γύρω της έναν κύκλο, γιατί μπορεί να απέχει μερικές δεκάδες μέτρα.</p>
+        <p id="wifiloc-state"><strong>Δωρεάν υπηρεσία (beaconDB)</strong></p>
+        <p id="wifiloc-usage" class="muted" hidden></p>
+        <p class="muted">Η δωρεάν υπηρεσία ξέρει λίγα Wi-Fi στην Ελλάδα: στη γειτονιά σου δεν ήξερε κανένα. Η Google ξέρει πολύ περισσότερα και δίνει 10.000 δωρεάν αναζητήσεις τον μήνα. Ο server δεν κάνει ποτέ πάνω από 300 τη μέρα και 9.000 τον μήνα, οπότε δεν χρεώνεσαι.</p>
+        <details>
+          <summary>Πώς βγαίνει κλειδί Google</summary>
+          <ol>
+            <li>Στο <strong>console.cloud.google.com</strong> μπαίνεις με τον λογαριασμό σου Google. Θέλει ανοιχτή την επαλήθευση σε 2 βήματα.</li>
+            <li>Στο <strong>Google Maps Platform</strong> κάνεις την εγγραφή με κινητό και κάρτα. Στη δοκιμαστική περίοδο δεν χρεώνει τίποτα, ούτε μετά αν δεν πατήσεις «Upgrade».</li>
+            <li>Στο <strong>APIs &amp; Services → Library</strong> ενεργοποιείς το <strong>Geolocation API</strong>.</li>
+            <li>Στο <strong>APIs &amp; Services → Credentials</strong>, στο κλειδί, αφήνεις στο <strong>API restrictions</strong> μόνο το Geolocation API.</li>
+            <li>Πατάς <strong>Show key</strong>, το αντιγράφεις (ξεκινάει με AIza), το βάζεις εδώ κάτω και πατάς «Αποθήκευση». Το κλειδί μένει στον server και δεν ξαναφαίνεται εδώ.</li>
+          </ol>
+        </details>
+        <label>Κλειδί Google <input id="wl-key" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AIza…"></label>
+        <button id="btn-wl-save" type="button" class="primary">Αποθήκευση</button>
+        <button id="btn-wl-off" type="button" hidden>Αφαίρεση κλειδιού: πίσω στη δωρεάν υπηρεσία</button>
+      </section>
+
+      <section class="settings-page" data-page="loan" hidden>
+        <p class="muted">Όταν δίνεις τη μηχανή σε συνεργείο ή σε φίλο. Δεν χτυπάει συναγερμός, αλλά σου έρχεται ήσυχη ειδοποίηση όταν ξεκινάει, βλέπεις στην εφαρμογή πού πάει και πόσο γρήγορα, και όταν σταματήσει μαθαίνεις χιλιόμετρα, χρόνο και μέγιστη ταχύτητα. Κρατάει μέχρι να το κλείσεις ή να οπλίσεις.</p>
+        <label>Ειδοποίηση αν περάσει τα
+          <select id="set-loan-speed">
+            <option value="0">Καμία ειδοποίηση ταχύτητας</option>
+            <option value="50">50 χλμ/ώ</option>
+            <option value="80">80 χλμ/ώ</option>
+            <option value="100">100 χλμ/ώ</option>
+            <option value="130">130 χλμ/ώ</option>
+          </select>
+        </label>
+        <button id="btn-loan" type="button" class="primary">Η μηχανή φεύγει: ξεκίνα</button>
+        <p id="loan-state" class="muted"></p>
+      </section>
+
+      <section class="settings-page" data-page="folder" hidden>
+        <p class="muted">Αν κλέψουν τη μηχανή: μια σελίδα για την αστυνομία ή την ασφαλιστική, με τα στοιχεία της, φωτογραφίες και τη διαδρομή της από τη στιγμή του συναγερμού, με ώρες. Συμπλήρωσέ τα μία φορά από τώρα.</p>
+        <div class="group-plain">
+          <label>Πινακίδα <input id="bk-plate" type="text" maxlength="16" autocapitalize="characters" autocomplete="off"></label>
+          <label>Αριθμός πλαισίου (VIN) <input id="bk-vin" type="text" maxlength="24" autocapitalize="characters" autocomplete="off"></label>
+          <label>Μοντέλο <input id="bk-model" type="text" maxlength="60"></label>
+          <label>Χρώμα <input id="bk-color" type="text" maxlength="40"></label>
+          <label>Σημάδια, αξεσουάρ, ό,τι την ξεχωρίζει <textarea id="bk-notes" maxlength="500" rows="3"></textarea></label>
+          <button id="btn-bike-save" type="button">Αποθήκευση στοιχείων</button>
+        </div>
+        <div class="group">
+          <h3>Φωτογραφίες</h3>
+          <p class="muted">Έως 3, από διαφορετικές πλευρές. Μικραίνουν στο κινητό πριν σταλούν.</p>
+          <div id="bike-photos" class="photo-grid"></div>
+        </div>
+        <div class="group">
+          <h3>Σύνδεσμος φακέλου</h3>
+          <p class="muted">Όποιος έχει τον σύνδεσμο βλέπει τον φάκελο χωρίς κωδικό, μέχρι να λήξει. Δεν βλέπει τίποτα άλλο και δεν αλλάζει τίποτα.</p>
+          <div id="folder-new" class="group-plain">
+            <label>Διάρκεια
+              <select id="folder-days">
+                <option value="3">3 μέρες</option>
+                <option value="7" selected>7 μέρες</option>
+                <option value="30">30 μέρες</option>
+              </select>
+            </label>
+            <button id="btn-folder-start" type="button" class="primary">Φτιάξε σύνδεσμο</button>
+          </div>
+          <div id="folder-active" class="group-plain" hidden>
+            <p>Λήγει: <strong id="folder-expires"></strong></p>
+            <p id="folder-from" class="muted"></p>
+            <input id="folder-url" type="text" readonly aria-label="Σύνδεσμος φακέλου">
+            <div class="share-buttons">
+              <button id="btn-folder-send" type="button" class="primary">Στείλε τον</button>
+              <button id="btn-folder-copy" type="button">Αντιγραφή</button>
+            </div>
+            <button id="btn-folder-open" type="button">Άνοιξε τον φάκελο</button>
+            <button id="btn-folder-stop" type="button">Σταμάτα τον σύνδεσμο</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-page" data-page="morning" hidden>
+        <p class="muted">Ένα ήσυχο μήνυμα κάθε πρωί: συναγερμοί και αγγίγματα της νύχτας, επανεκκινήσεις, μπαταρία και επαφή. Αν κάτι δεν πάει καλά (χωρίς επαφή, χαμηλή μπαταρία), το λέει πρώτο και κάνει κανονικό ήχο.</p>
+        <label class="check">
+          <input id="set-morning" type="checkbox">
+          <span>Πρωινή σύνοψη</span>
+        </label>
+        <label>Ώρα <input id="set-morning-time" type="time" step="300"></label>
+      </section>
+
+      <section class="settings-page" data-page="wifi" hidden>
+        <p class="muted">Όπου πιάνει ένα από αυτά τα Wi-Fi, η πλακέτα στέλνει από εκεί αντί για 4G: πιο γρήγορα, και εκεί που δεν πιάνει το κινητό. Δοκιμάζει πρώτα αυτό που δούλεψε την τελευταία φορά, αλλιώς το πιο δυνατό που βρίσκει. Μέχρι 5 δίκτυα.</p>
+        <ul id="wifi-list" class="wifi-list"></ul>
+        <p id="wifi-sync" class="muted" hidden></p>
+        <p class="muted">Η πλακέτα μαθαίνει τις αλλαγές με την επόμενη αναφορά της, άρα πρόσθεσε ένα δίκτυο όσο εκείνη έχει σύνδεση (π.χ. στο σπίτι). Ο κωδικός μένει στον server και στην πλακέτα και δεν ξαναφαίνεται εδώ. Το Wi-Fi που μπήκε από τον υπολογιστή μένει κι αυτό στην πλακέτα.</p>
+        <label>Όνομα του Wi-Fi <input id="wifi-ssid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="όπως φαίνεται στο κινητό"></label>
+        <label>Κωδικός <input id="wifi-pass" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="63"></label>
+        <button id="btn-wifi-add" type="button" class="primary">Προσθήκη</button>
+      </section>
+
+      <div class="dialog-footer">
+        <p id="settings-msg" class="muted" aria-live="polite"></p>
+        <button value="close" class="primary">Κλείσιμο</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Service book. Not a <form method="dialog">: Enter in a field must not close it. -->
+  <dialog id="service" aria-labelledby="svc-title">
+    <div class="settings-form svc">
+      <div class="settings-head">
+        <button id="svc-back" type="button" class="back-btn" hidden>‹ Σέρβις</button>
+        <h2 id="svc-title">Σέρβις</h2>
+      </div>
+
+      <section class="svc-page" data-page="book">
+        <div class="svc-tiles">
+          <button id="svc-odo" type="button" class="svc-tile" aria-controls="svc-odo-edit" aria-expanded="false">
+            <span class="svc-tile-label">Χιλιόμετρα ✎</span>
+            <strong id="svc-odo-km">—</strong>
+            <small id="svc-odo-date">Πάτα για να τα γράψεις</small>
+          </button>
+          <div class="svc-tile">
+            <span id="svc-year-label" class="svc-tile-label">Κόστος φέτος</span>
+            <strong id="svc-year-cost">—</strong>
+            <small id="svc-year-count"></small>
+          </div>
+        </div>
+        <div id="svc-odo-edit" class="svc-odo-edit" hidden>
+          <label>Τι δείχνει τώρα το κοντέρ
+            <input id="svc-odo-input" type="text" inputmode="numeric" autocomplete="off" maxlength="9" placeholder="π.χ. 12.400">
+          </label>
+          <button id="btn-svc-odo" type="button" class="primary">Αποθήκευση</button>
+        </div>
+        <p id="svc-odo-hint" class="svc-hint" hidden></p>
+        <p id="svc-odo-gps" class="muted svc-gps" hidden></p>
+        <button id="btn-svc-new" type="button" class="primary svc-new" disabled>+ Νέο σέρβις</button>
+
+        <div id="svc-intro" class="svc-intro" hidden>
+          <p>Γράψε εδώ κάθε σέρβις: πότε έγινε, στα πόσα χιλιόμετρα, τι άλλαξες, πού και πόσο κόστισε.</p>
+          <p class="muted">Έτσι βλέπεις πότε άλλαξες τελευταία φορά λάδια και πόσα χιλιόμετρα έχεις κάνει από τότε, και η εφαρμογή σού θυμίζει το επόμενο σέρβις. Μπορείς να γράψεις και τα παλιά από το βιβλιαράκι.</p>
+        </div>
+
+        <div id="svc-next-wrap" class="svc-block">
+          <div class="card-head">
+            <h3>Επόμενα σέρβις</h3>
+            <button type="button" class="link-btn" data-svc-go="intervals">Προτάσεις</button>
+          </div>
+          <ul id="svc-next" class="svc-rows"></ul>
+          <p id="svc-untracked" class="muted svc-untracked" hidden></p>
+        </div>
+
+        <div id="svc-worn-wrap" class="svc-block">
+          <h3>Τελευταία αλλαγή</h3>
+          <ul id="svc-worn" class="svc-rows"></ul>
+        </div>
+
+        <div id="svc-history-wrap" class="svc-block">
+          <h3>Όλα τα σέρβις</h3>
+          <div id="svc-history" class="svc-history"></div>
+        </div>
+
+        <div id="svc-years-wrap" class="svc-block">
+          <h3>Κόστος ανά έτος</h3>
+          <ul id="svc-years" class="svc-years"></ul>
+          <p id="svc-total" class="muted"></p>
+        </div>
+      </section>
+
+      <section class="svc-page" data-page="entry" hidden>
+        <ul id="svc-e-items" class="svc-tags"></ul>
+        <dl id="svc-e-facts" class="svc-facts"></dl>
+        <div id="svc-e-next-wrap" class="svc-block" hidden>
+          <h3>Επόμενη φορά</h3>
+          <dl id="svc-e-next" class="svc-facts"></dl>
+        </div>
+        <div id="svc-e-notes-wrap" class="svc-block" hidden>
+          <h3>Σημειώσεις</h3>
+          <p id="svc-e-notes" class="svc-notes"></p>
+        </div>
+        <div class="share-buttons">
+          <button id="btn-svc-edit" type="button">Αλλαγή</button>
+          <button id="btn-svc-delete" type="button" class="btn-danger">Διαγραφή</button>
+        </div>
+      </section>
+
+      <!-- No submit button on purpose: the keyboard's Enter does not save half a form. -->
+      <form id="svc-form" class="svc-page" data-page="form" hidden novalidate autocomplete="off">
+        <div class="time-row">
+          <label>Ημερομηνία <input name="date" type="date" required></label>
+          <label>Χιλιόμετρα <input name="km" type="text" inputmode="numeric" maxlength="9" placeholder="π.χ. 12.400"></label>
+        </div>
+        <fieldset class="svc-jobs">
+          <legend>Τι έγινε <small class="muted">(διάλεξε όσα ισχύουν)</small></legend>
+          <div id="svc-jobs" class="svc-jobs-list"></div>
+        </fieldset>
+        <fieldset id="svc-next-set" class="svc-jobs" hidden>
+          <legend>Επόμενη φορά <small class="muted">(για την υπενθύμιση)</small></legend>
+          <p class="muted svc-next-help">Στα πόσα χιλιόμετρα του κοντέρ ή ως πότε, ό,τι έρθει πρώτο. Συμπληρώνεται μόνο του από τις προτάσεις, κι εσύ το αλλάζεις όπως θες. Άφησε κενό ό,τι δεν θέλεις να σου θυμίζει.</p>
+          <div id="svc-next-rows" class="svc-next-rows"></div>
+        </fieldset>
+        <label>Κάτι άλλο <input name="other" type="text" maxlength="120" placeholder="π.χ. δίσκοι φρένων, ΚΤΕΟ"></label>
+        <label>Συνεργείο <input name="shop" type="text" maxlength="80" list="svc-shops" placeholder="όνομα, ή «μόνος μου»"></label>
+        <datalist id="svc-shops"></datalist>
+        <label>Κόστος σε € <input name="cost" type="text" inputmode="decimal" maxlength="12" placeholder="π.χ. 85,50"></label>
+        <label>Σημειώσεις <textarea name="notes" rows="4" maxlength="2000" placeholder="π.χ. μάρκα και τύπος λαδιού, ανταλλακτικά, τι είπε ο μηχανικός"></textarea></label>
+      </form>
+
+      <section class="svc-page" data-page="intervals" hidden>
+        <label class="check">
+          <input id="svc-notify" type="checkbox">
+          <span>Ειδοποίηση στο κινητό για το σέρβις
+            <small class="muted">Ήσυχη ειδοποίηση μία φορά όταν πλησιάζει (300 χλμ ή 2 εβδομάδες πριν) και μία όταν περάσει, γύρω στις 10 το πρωί. Θέλει ενεργές ειδοποιήσεις.</small></span>
+        </label>
+        <p class="muted">Από εδώ συμπληρώνεται μόνο του το «Επόμενη φορά» σε κάθε νέο σέρβις: τα χιλιόμετρα του σέρβις συν τόσα, και η ημερομηνία συν τόσους μήνες. Είναι μόνο πρόταση: σε κάθε σέρβις το αλλάζεις όπως θες. Άφησε κενό ό,τι δεν θέλεις να προτείνει. Οι αρχικές τιμές είναι από το πρόγραμμα συντήρησης της Honda για το Hornet 750.</p>
+        <div class="svc-int-head" aria-hidden="true"><span></span><span>χλμ</span><span>μήνες</span></div>
+        <ul id="svc-intervals" class="svc-intervals"></ul>
+        <button id="btn-svc-reset" type="button">Επαναφορά στις τιμές της Honda</button>
+      </section>
+
+      <div class="dialog-footer svc-footer">
+        <p id="svc-msg" class="muted" aria-live="polite"></p>
+        <div class="svc-footer-buttons">
+          <button id="svc-cancel" type="button" hidden>Ακύρωση</button>
+          <button id="svc-save" type="button" class="primary" hidden>Αποθήκευση</button>
+          <button id="svc-close" type="button" class="primary">Κλείσιμο</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="share-dialog">
+    <form method="dialog" class="settings-form">
+      <h2>Κοινοποίηση θέσης</h2>
+      <p class="muted">Όποιος έχει τον σύνδεσμο βλέπει πού είναι η μηχανή και τη διαδρομή της, μέχρι να λήξει. Δεν βλέπει τίποτα άλλο και δεν μπορεί να αλλάξει τίποτα. Χρήσιμο για την αστυνομία ή για έναν φίλο αν την κλέψουν.</p>
+      <div id="share-new" class="group-plain">
+        <label>Διάρκεια
+          <select id="share-hours">
+            <option value="1">1 ώρα</option>
+            <option value="24" selected>24 ώρες</option>
+            <option value="72">3 μέρες</option>
+          </select>
+        </label>
+        <button id="btn-share-start" type="button" class="primary">Φτιάξε σύνδεσμο</button>
+      </div>
+      <div id="share-active" class="group-plain" hidden>
+        <p>Ο σύνδεσμος λήγει: <strong id="share-expires"></strong></p>
+        <input id="share-url" type="text" readonly aria-label="Σύνδεσμος">
+        <div class="share-buttons">
+          <button id="btn-share-send" type="button" class="primary">Στείλε τον</button>
+          <button id="btn-share-copy" type="button">Αντιγραφή</button>
+        </div>
+        <button id="btn-share-stop" type="button">Σταμάτα την κοινοποίηση</button>
+      </div>
+      <div class="dialog-footer">
+        <p id="share-msg" class="muted" aria-live="polite"></p>
+        <button value="close">Κλείσιμο</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rides-dialog">
+    <form method="dialog" class="settings-form">
+      <h2>Διαδρομές</h2>
+      <div class="group-plain">
+        <button id="btn-speedo" type="button" class="primary">Ταχύμετρο στο κινητό</button>
+        <p class="muted">Με το GPS του κινητού: η ταχύτητα αλλάζει κάθε δευτερόλεπτο, χωρίς την πλακέτα. Βάλε το κινητό στη βάση του τιμονιού· η οθόνη μένει αναμμένη όσο είναι ανοιχτό.</p>
+      </div>
+      <div class="group">
+        <h3>Προηγούμενες διαδρομές</h3>
+        <p class="muted">Από την πλακέτα. Πάτα μία για να τη δεις στον χάρτη.</p>
+        <ul id="trips" class="trips"></ul>
+        <p id="trips-empty" class="muted" hidden>Δεν υπάρχει καμία ακόμα. Η πρώτη θα φανεί εδώ μόλις παρκάρεις μετά από μια βόλτα.</p>
+      </div>
+      <div class="dialog-footer">
+        <p id="rides-msg" class="muted" aria-live="polite"></p>
+        <button value="close">Κλείσιμο</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="speedo" class="speedo" aria-label="Ταχύμετρο">
+    <div class="speedo-body">
+      <div class="speedo-speed"><strong id="sp-speed">—</strong><span>χλμ/ώ</span></div>
+      <dl class="speedo-stats">
+        <div><dt>Απόσταση</dt><dd id="sp-km">—</dd></div>
+        <div><dt>Χρόνος</dt><dd id="sp-time">—</dd></div>
+        <div><dt>Μέση</dt><dd id="sp-avg">—</dd></div>
+        <div><dt>Μέγιστη</dt><dd id="sp-max">—</dd></div>
+      </dl>
+      <p id="sp-status" class="muted" aria-live="polite"></p>
+      <div class="speedo-buttons">
+        <button id="sp-reset" type="button">Μηδενισμός</button>
+        <button id="sp-close" type="button" class="primary">Τέλος</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js" crossorigin=""></script>
+  <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js" crossorigin=""></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

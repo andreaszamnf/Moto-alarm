@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Προσομοιωτής μηχανής</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f3f4f6; --card: #fff; --text: #111827; --muted: #5b6472; --border: #d8dce3; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0b0f17; --card: #131924; --text: #e6e8eb; --muted: #9aa3b0; --border: #253143; } }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, sans-serif; }
+    main { max-width: 620px; margin: 0 auto; display: grid; gap: 12px; }
+    h1 { font-size: 1.2rem; margin: 0; }
+    p { margin: 0; color: var(--muted); }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: grid; gap: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { font: inherit; min-height: 44px; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; }
+    button.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+    dl { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0; }
+    dt { font-size: 0.75rem; color: var(--muted); }
+    dd { margin: 0; font-weight: 600; }
+    pre { margin: 0; max-height: 280px; overflow: auto; font-size: 0.8rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Προσομοιωτής συσκευής</h1>
+    <p>Στέλνει στον server ό,τι θα έστελνε η πλακέτα στη μηχανή, για να δοκιμάσουμε την εφαρμογή χωρίς υλικό.</p>
+
+    <section class="card">
+      <dl>
+        <div><dt>Κατάσταση</dt><dd id="s-mode">Παρκαρισμένη</dd></div>
+        <div><dt>Μπαταρία</dt><dd id="s-batt"></dd></div>
+        <div><dt>Οπλισμένος</dt><dd id="s-armed">;</dd></div>
+        <div><dt>Παρακολούθηση</dt><dd id="s-track">όχι</dd></div>
+      </dl>
+      <div class="row">
+        <button id="b-park" type="button">Στάθμευση με θέση</button>
+        <button id="b-heartbeat" type="button">Αναφορά «είμαι καλά»</button>
+        <button id="b-touch" type="button">Κάποιος την ακουμπάει</button>
+        <button id="b-ride" type="button">Βόλτα (αφοπλισμένος)</button>
+        <button id="b-theft" type="button" class="danger">Κλοπή: φεύγει</button>
+        <button id="b-stop" type="button">Σταματά</button>
+        <button id="b-battery" type="button">Μπαταρία −10%</button>
+      </div>
+      <label><input id="no-gps" type="checkbox"> Χωρίς GPS (σε γκαράζ): στέλνει τα Wi-Fi γύρω της αντί για θέση</label>
+    </section>
+
+    <section class="card">
+      <pre id="log" aria-live="polite"></pre>
+    </section>
+  </main>
+
+  <script type="module">
+    const START = { lat: 37.9838, lon: 23.7275 };
+    const TRACK_MS = 3000; // the real device waits 30 s; the simulator is faster
+    const sim = { ...START, batt: 82, moving: false, heading: Math.random() * Math.PI * 2, timer: null, armed: null, track: false };
+    const { deviceKey } = await (await fetch('/dev/config')).json();
+    const $ = (id) => document.getElementById(id);
+
+    function log(line) {
+      const time = new Date().toLocaleTimeString('el-GR');
+      $('log').textContent = `${time}  ${line}\n${$('log').textContent}`.slice(0, 6000);
+    }
+
+    function render() {
+      $('s-mode').textContent = sim.riding ? 'Βόλτα' : sim.moving ? 'Κινείται' : 'Παρκαρισμένη';
+      $('s-batt').textContent = `${sim.batt}%`;
+      $('s-armed').textContent = sim.armed === null ? ';' : sim.armed ? 'ναι' : 'όχι';
+      $('s-track').textContent = sim.track ? 'ναι' : 'όχι';
+    }
+
+    function step(metres) {
+      sim.heading += (Math.random() - 0.5) * 0.4;
+      sim.lat += (Math.cos(sim.heading) * metres) / 111_320;
+      sim.lon += (Math.sin(sim.heading) * metres) / (111_320 * Math.cos((sim.lat * Math.PI) / 180));
+    }
+
+    const fix = (speed = 0) => ({ lat: +sim.lat.toFixed(6), lon: +sim.lon.toFixed(6), acc: 6, spd: speed, t: Math.floor(Date.now() / 1000) });
+    // Made-up access points, as the board would send them when the GPS finds nothing.
+    const WIFI = [
+      { m: '3c:84:6a:11:22:31', s: -58 },
+      { m: '3c:84:6a:11:22:32', s: -71 },
+      { m: 'e4:8d:8c:55:66:77', s: -80 },
+    ];
+    const where = (speed = 0) => ($('no-gps').checked ? { wifi: WIFI } : { fix: fix(speed) });
+
+    async function report(reason, extra = {}) {
+      const body = { reason, batt: { pct: sim.batt, mv: Math.round(3300 + sim.batt * 9) }, rssi: -79, ...extra };
+      const res = await fetch('/api/device/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deviceKey}` },
+        body: JSON.stringify(body),
+      });
+      const reply = await res.json();
+      sim.armed = reply.armed;
+      sim.track = reply.track;
+      log(`→ ${reason}   ← armed=${reply.armed} track=${reply.track} locate=${reply.locate}`);
+      render();
+      if (reply.locate && reason !== 'locate') await report('locate', where(sim.moving ? 30 : 0));
+      return reply;
+    }
+
+    function startMoving() {
+      if (sim.timer) return;
+      sim.moving = true;
+      let n = 0;
+      sim.timer = setInterval(async () => {
+        n += 1;
+        step(n < 4 ? 6 : 25); // pushed away first, then ridden
+        await report('tracking', { moving: true, ...where(n < 4 ? 5 : 30) });
+      }, TRACK_MS);
+      render();
+    }
+
+    // A ride as firmware 1.6.0 sends it: a GPS point every 3 seconds, five of them in each report.
+    // The simulator sends a report every 5 seconds (the board every 15), with points a second apart.
+    const RIDE_MS = 5000;
+    function startRide() {
+      if (sim.timer) return;
+      sim.moving = true;
+      sim.riding = true;
+      let kmh = 30;
+      sim.timer = setInterval(async () => {
+        const pts = [];
+        const now = Math.floor(Date.now() / 1000);
+        for (let i = 4; i >= 0; i--) {
+          kmh = Math.max(0, Math.min(120, kmh + (Math.random() - 0.4) * 12));
+          step((kmh / 3.6) * 1);
+          pts.push([now - i, +sim.lat.toFixed(6), +sim.lon.toFixed(6), +kmh.toFixed(1)]);
+        }
+        const [t, lat, lon, spd] = pts[4];
+        const reply = await report('ride', { moving: true, lastMove: t, fix: { lat, lon, acc: 5, spd, t }, pts, fw: '1.6.0' });
+        if (reply.armed) {
+          stopMoving(); // armed: the board parks at once
+          log('Οπλίστηκε: η πλακέτα σταματά τη βόλτα.');
+        }
+      }, RIDE_MS);
+      render();
+    }
+
+    function stopMoving() {
+      clearInterval(sim.timer);
+      sim.timer = null;
+      sim.moving = false;
+      sim.riding = false;
+      render();
+    }
+
+    $('b-park').addEventListener('click', () => report('parked', where()));
+    $('b-heartbeat').addEventListener('click', () => report('heartbeat', where()));
+    $('b-touch').addEventListener('click', () => report('motion', { tilt: 3 }));
+    $('b-ride').addEventListener('click', async () => {
+      const reply = await report('motion', { tilt: 5 });
+      if (reply.track) startMoving();
+      else startRide();
+    });
+    $('b-theft').addEventListener('click', async () => {
+      await report('motion', { tilt: 14 });
+      startMoving();
+    });
+    $('b-stop').addEventListener('click', async () => {
+      stopMoving();
+      await report('parked', where());
+    });
+    $('b-battery').addEventListener('click', () => {
+      sim.batt = Math.max(0, sim.batt - 10);
+      report('heartbeat');
+    });
+
+    render();
+    log('Έτοιμος. Πάτα «Στάθμευση με θέση» για να ξεκινήσεις.');
+  </script>
+</body>
+</html>
