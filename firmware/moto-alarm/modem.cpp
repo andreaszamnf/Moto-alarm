@@ -379,16 +379,37 @@ bool Modem::readNetInfo(NetInfo& info) {
   return info.op.length() > 0;
 }
 
+// The length in a "+HTTPREAD:" line. The SIM7600 writes "+HTTPREAD: DATA,<n>" (other SIMCom modems
+// "+HTTPREAD: <n>"), and a length of 0 at the end. Up to 1.8.5 only "<n>" was read, so " DATA,2048"
+// read as 0, the end, and a download over 4G never got a byte: on 2026-11-21 the board asked six
+// times for the first part of 1.8.4. -1: no length there.
+static long httpReadLength(const String& line) {
+  unsigned i = 10;  // after "+HTTPREAD:"
+  while (i < line.length() && line[i] == ' ') i++;
+  if (line.startsWith("DATA,", i)) i += 5;
+  if (i >= line.length() || !isDigit(line[i])) return -1;
+  return line.substring(i).toInt();
+}
+
 String Modem::readBody(int length) {
   String raw;
   port_.printf("AT+HTTPREAD=0,%d\r", length);
   const uint32_t start = millis();
   while (millis() - start < 10000) {
     while (port_.available()) raw += static_cast<char>(port_.read());
-    if (raw.indexOf("+HTTPREAD: 0") >= 0) break;
+    if (raw.indexOf("+HTTPREAD: 0") >= 0 || raw.indexOf("+HTTPREAD:0") >= 0) break;
     esp_task_wdt_reset();
     delay(10);
   }
+  // The "+HTTPREAD" lines without the data, so the server sees how this modem frames an answer.
+  String seen;
+  for (int at = raw.indexOf("+HTTPREAD"); at >= 0 && seen.length() < 40; at = raw.indexOf("+HTTPREAD", at + 1)) {
+    int end = at;
+    while (end < static_cast<int>(raw.length()) && end - at < 22 && raw[end] != '\r' && raw[end] != '\n' && raw[end] != '{') end++;
+    if (seen.length()) seen += '|';
+    seen += raw.substring(at, end);
+  }
+  strlcpy(framing_, seen.c_str(), sizeof framing_);
   // The body sits between "+HTTPREAD: <len>" and "+HTTPREAD: 0"; the server only sends JSON.
   const int open = raw.indexOf('{');
   const int close = raw.lastIndexOf('}');
@@ -439,9 +460,14 @@ int Modem::post(const char* url, const char* bearer, const String& json, String&
   return status;
 }
 
-// Reads `want` bytes of the last HTTP answer, from `offset`, without treating them as text:
-// "+HTTPREAD: <n>", then exactly n raw bytes, until "+HTTPREAD: 0".
-bool Modem::readBinary(size_t offset, uint8_t* out, size_t want) {
+void Modem::noteLine(const char* what, const String& line) {
+  snprintf(note_, sizeof note_, "%s: %s", what, line.length() ? line.c_str() : "-");
+}
+
+// Reads up to `want` bytes of the last HTTP answer, from `offset`, without treating them as text:
+// a "+HTTPREAD:" line with a length, exactly that many raw bytes, and so on until the length 0.
+// Returns how many bytes came (the modem may send fewer than asked), or -1.
+int Modem::readBinary(size_t offset, uint8_t* out, size_t want) {
   while (port_.available()) port_.read();
   port_.printf("AT+HTTPREAD=%u,%u\r", static_cast<unsigned>(offset), static_cast<unsigned>(want));
   String line;
@@ -459,35 +485,61 @@ bool Modem::readBinary(size_t offset, uint8_t* out, size_t want) {
       }
       if (c == '\r') continue;
       if (c != '\n') {
-        if (line.length() < 64) line += static_cast<char>(c);
+        if (line.length() < 40) line += static_cast<char>(c);
         continue;
       }
       line.trim();
       if (line.startsWith("+HTTPREAD:")) {
-        const long n = line.substring(10).toInt();
-        if (n == 0) return got == want;
-        if (n < 0 || got + static_cast<size_t>(n) > want) return false;
+        const long n = httpReadLength(line);
+        if (n == 0) {
+          if (got) return static_cast<int>(got);
+          noteLine("nothing", line);
+          return -1;
+        }
+        if (n < 0 || got + static_cast<size_t>(n) > want) {
+          noteLine("odd", line);
+          return -1;
+        }
         blockEnd = got + static_cast<size_t>(n);
         inData = true;
       } else if (line == "ERROR" || line.startsWith("+CME ERROR")) {
-        return false;
+        noteLine("read", line);
+        return -1;
       }
       line = "";
     }
     esp_task_wdt_reset();
     delay(2);
   }
-  return false;
+  if (got && !inData) return static_cast<int>(got);  // no end line, but whole blocks
+  snprintf(note_, sizeof note_, "slow: %u of %u", static_cast<unsigned>(got), static_cast<unsigned>(want));
+  return -1;
 }
 
 int Modem::get(const String& url, const char* bearer, uint8_t* out, size_t max) {
-  if (!on_ || !openHttp()) return -1;
+  note_[0] = '\0';
+  if (!on_ || !openHttp()) {
+    strlcpy(note_, on_ ? "no http" : "modem off", sizeof note_);
+    return -1;
+  }
   int length = -1;
   String reply;
-  const bool ok = command(String("+HTTPPARA=\"URL\",\"") + url + "\"", 3000) &&
-                  command(String("+HTTPPARA=\"USERDATA\",\"Authorization: Bearer ") + bearer + "\"", 3000) &&
-                  command("+HTTPACTION=0", 3000) && waitFor("+HTTPACTION:", 120000, &reply);
+  // Which step failed goes into the note (never the command itself: it holds the device key).
+  const char* step = "url";
+  bool ok = command(String("+HTTPPARA=\"URL\",\"") + url + "\"", 3000);
   if (ok) {
+    step = "key";
+    ok = command(String("+HTTPPARA=\"USERDATA\",\"Authorization: Bearer ") + bearer + "\"", 3000);
+  }
+  if (ok) {
+    step = "get";
+    ok = command("+HTTPACTION=0", 3000) && waitFor("+HTTPACTION:", 120000, &reply);
+  }
+  if (!ok) {
+    reply.trim();
+    const int last = reply.lastIndexOf('\n');
+    noteLine(step, last >= 0 ? reply.substring(last + 1) : reply);
+  } else {
     // "+HTTPACTION: 0,200,16384": method, status, body length
     const int at = reply.lastIndexOf("+HTTPACTION:");
     const int c1 = reply.indexOf(',', at);
@@ -499,10 +551,17 @@ int Modem::get(const String& url, const char* bearer, uint8_t* out, size_t max) 
       size_t done = 0;
       while (done < static_cast<size_t>(size)) {
         const size_t piece = static_cast<size_t>(size) - done < PIECE ? static_cast<size_t>(size) - done : PIECE;
-        if (!readBinary(done, out + done, piece)) break;
-        done += piece;
+        const int n = readBinary(done, out + done, piece);
+        if (n <= 0) break;
+        done += static_cast<size_t>(n);
       }
-      if (done == static_cast<size_t>(size)) length = static_cast<int>(size);
+      if (done == static_cast<size_t>(size)) {
+        length = static_cast<int>(size);
+      } else if (!note_[0]) {
+        snprintf(note_, sizeof note_, "short: %u of %ld", static_cast<unsigned>(done), size);
+      }
+    } else {
+      snprintf(note_, sizeof note_, "answer %d, %ld bytes", status, size);
     }
   }
   command("+HTTPTERM", 2000);

@@ -24,7 +24,8 @@ id = "PUT-YOUR-KV-NAMESPACE-ID-HERE"  # from: npx wrangler kv namespace create F
 PUBLIC_ORIGIN = "https://moto-alarm.YOUR-SUBDOMAIN.workers.dev"
 VAPID_SUBJECT = "https://moto-alarm.YOUR-SUBDOMAIN.workers.dev"
 
-# Every 30 minutes: "lost contact" check and cleanup of data older than 90 days.
+# Every 5 minutes: automation, "lost contact" check, the daily service reminder and morning
+# summary (each sent once a day), and cleanup of data older than 90 days.
 [triggers]
 crons = ["*/5 * * * *"]
 

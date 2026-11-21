@@ -1,6 +1,7 @@
 #include "ota.h"
 
 #include <Update.h>
+#include <esp_attr.h>
 #include <esp_ota_ops.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/sha256.h>
@@ -35,6 +36,13 @@ namespace {
 constexpr size_t PART = 16 * 1024;          // one HTTPS request
 constexpr uint32_t MAX_IMAGE = 0x1E0000;    // a program slot with PartitionScheme=min_spiffs
 constexpr uint8_t MAX_FAILED_PARTS = 5;
+
+RTC_DATA_ATTR char note[72] = "";  // see firmwareNote()
+
+void setNote(const FirmwareOffer& offer, const char* via, uint32_t at, const char* why) {
+  snprintf(note, sizeof note, "%s %s@%u %s", offer.version.c_str(), via, static_cast<unsigned>(at), why);
+  Serial.printf("ota: %s\n", note);
+}
 
 size_t fromHex(const String& hex, uint8_t* out, size_t max) {
   const size_t n = hex.length() / 2;
@@ -93,9 +101,11 @@ bool installFirmware(Modem& modem, const FirmwareOffer& offer) {
   while (done < offer.size) {
     const uint32_t want = offer.size - done < PART ? offer.size - done : PART;
     const String url = base + "&from=" + done + "&len=" + want;
-    const int got = wifiConnected() ? wifiGet(url, DEVICE_KEY, buf, want) : modem.get(url, DEVICE_KEY, buf, want);
+    const bool viaWifi = wifiConnected();
+    const int got = viaWifi ? wifiGet(url, DEVICE_KEY, buf, want) : modem.get(url, DEVICE_KEY, buf, want);
     if (got != static_cast<int>(want)) {
       if (++failed > MAX_FAILED_PARTS) {
+        setNote(offer, viaWifi ? "wifi" : "4g", done, viaWifi ? "failed" : modem.getNote());
         ok = false;
         break;
       }
@@ -123,7 +133,7 @@ bool installFirmware(Modem& modem, const FirmwareOffer& offer) {
     return false;
   }
   if (!signedByUs(hash, offer.signature)) {
-    Serial.println("ota: not signed by us, ignored");
+    setNote(offer, wifiConnected() ? "wifi" : "4g", done, "not signed by us");
     Update.abort();
     return false;
   }
@@ -134,6 +144,10 @@ bool installFirmware(Modem& modem, const FirmwareOffer& offer) {
   Serial.printf("ota: %s installed, restarting\n", offer.version.c_str());
   return true;
 }
+
+const char* firmwareNote() { return note; }
+
+void clearFirmwareNote() { note[0] = '\0'; }
 
 bool firmwareOnTrial() {
   esp_ota_img_states_t state;

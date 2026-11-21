@@ -47,6 +47,10 @@ class Modem {
   int post(const char* url, const char* bearer, const String& json, String& response);
   // GETs a binary answer over HTTPS into `out` (at most `max` bytes). Returns its length, or -1.
   int get(const String& url, const char* bearer, uint8_t* out, size_t max);
+  // Why the last get() failed, in a few words ("" when it worked).
+  const char* getNote() const { return note_; }
+  // The "+HTTPREAD" lines of the last post() answer, without the data: the modem's own format.
+  const char* framing() const { return framing_; }
   void gpsOn();
   void gpsOff();
   bool readFix(Fix& fix);
@@ -67,9 +71,12 @@ class Modem {
   void lteOnly();
   String readBody(int length);
   bool openHttp();
-  bool readBinary(size_t offset, uint8_t* out, size_t want);
+  int readBinary(size_t offset, uint8_t* out, size_t want);
+  void noteLine(const char* what, const String& line);
 
   HardwareSerial& port_;
+  char note_[64] = "";
+  char framing_[48] = "";
   bool on_ = false;
   bool gps_ = false;
   bool warm_ = false;

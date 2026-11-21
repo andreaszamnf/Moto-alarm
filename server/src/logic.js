@@ -367,6 +367,10 @@ export async function handleReport({
     // Powered by the bike (its 12 V through a 5 V converter, seen by the board as USB), firmware 1.7.0 on.
     ext: typeof report?.ext === 'boolean' ? report.ext : null,
     eco: report?.eco === true, // the board keeps «Χαμηλή κατανάλωση» (firmware 1.8.2 on)
+    // Firmware 1.8.6 on, kept until something newer comes: why the last update did not go in
+    // ("1.8.7 4g@16384 odd: +HTTPREAD: …"), and how the modem framed its last answer over 4G.
+    otaErr: typeof report?.otaErr === 'string' ? { text: report.otaErr.slice(0, 80), at: now } : deviceBefore?.otaErr ?? null,
+    hr: typeof report?.hr === 'string' ? { text: report.hr.slice(0, 60), at: now } : deviceBefore?.hr ?? null,
   });
   await firmwareEvents({ store, before: deviceBefore?.fw ?? null, running, now });
   // The board started afresh instead of waking from its sleep: power came back, the voltage

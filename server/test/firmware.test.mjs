@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { FW_MAX_TRIES, FW_RETRY_MS, compareVersions, validVersion } from '../src/firmware.js';
+import { FW_MAX_TRIES, FW_OVER_4G, FW_RETRY_MS, compareVersions, validVersion } from '../src/firmware.js';
 import worker from '../src/index.js';
 import { handleReport, setArmed, snapshot } from '../src/logic.js';
 import { MemoryStore } from '../src/store.js';
@@ -31,7 +31,7 @@ test('new firmware is offered only to an older board, parked and calm, with enou
   assert.equal((await report({ reason: 'ride', fw: '1.1.0' }, T0)).update, undefined, 'not while riding');
   assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0', batt: { pct: 20 } }, T0)).update, undefined, 'not on a low battery');
   assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0' }, T0, null)).update, undefined, 'nothing published');
-  assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0', via: '4g' }, T0)).update, undefined, 'not over 4G: the board cannot read the parts there yet');
+  assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0', via: '4g' }, T0)).update, undefined, `not over 4G before ${FW_OVER_4G}: it could not read the parts there`);
 
   const res = await report({ reason: 'heartbeat', fw: '1.1.0', batt: { pct: 80 } }, T0);
   assert.deepEqual(res.update, LATEST);
@@ -44,6 +44,20 @@ test('new firmware is offered only to an older board, parked and calm, with enou
   await armedStore.set('fw_offer', null);
   await armedReport({ reason: 'motion', fw: '1.1.0' }, T0 + min(1));
   assert.equal((await armedReport({ reason: 'heartbeat', fw: '1.1.0' }, T0 + min(2))).update, undefined);
+});
+
+test('from 1.8.6 on the board also gets updates over 4G, and says why one failed', async () => {
+  const NEXT = { ...LATEST, v: '1.8.7' };
+  const { store, report } = setup();
+  assert.equal((await report({ reason: 'heartbeat', fw: '1.8.5', via: '4g' }, T0, NEXT)).update, undefined, '1.8.5 still waits for Wi-Fi');
+  assert.equal((await report({ reason: 'heartbeat', fw: '1.8.6', via: '4g' }, T0, NEXT)).update.v, '1.8.7');
+
+  // The next report tells why the download did not work, and how the modem framed its answer.
+  await report({ reason: 'heartbeat', fw: '1.8.6', via: '4g', otaErr: '1.8.7 4g@0 odd: +HTTPREAD: X', hr: '+HTTPREAD: DATA,57|+HTTPREAD: 0' }, T0 + min(15));
+  await report({ reason: 'checkin', fw: '1.8.6', via: 'wifi' }, T0 + min(30));
+  const device = await store.get('device');
+  assert.deepEqual(device.otaErr, { text: '1.8.7 4g@0 odd: +HTTPREAD: X', at: T0 + min(15) }, 'kept until a newer one comes');
+  assert.deepEqual(device.hr, { text: '+HTTPREAD: DATA,57|+HTTPREAD: 0', at: T0 + min(15) });
 });
 
 test('a board that installs the update is noted in the history', async () => {

@@ -8,6 +8,10 @@ export const FW_MAX_TRIES = 3;
 export const FW_RETRY_MS = 6 * 3_600_000;
 export const FW_PART_MAX = 32 * 1024;
 const FW_MIN_BATTERY = 30;
+// The first board program that can download over 4G. Up to 1.8.5 it read the SIM7600's
+// "+HTTPREAD: DATA,<n>" as the end of the data: on 2026-11-21 it asked six times for the first part
+// of 1.8.4 over 4G, the server answered 200 each time, and it gave up.
+export const FW_OVER_4G = '1.8.6';
 // Only while parked and calm: never during an alarm or a ride.
 const QUIET_REASONS = new Set(['heartbeat', 'checkin', 'boot', 'parked', 'locate']);
 
@@ -24,13 +28,13 @@ export function compareVersions(a, b) {
  * New firmware to offer in the answer to a report: { v, size, sig } or null.
  * latest is what tools/publish-firmware.mjs published: { v, size, sig }.
  * At most 3 tries per version, 6 hours apart: a board that keeps its old version went back by itself.
- * Only to a report that came over Wi-Fi: over 4G the board cannot read the parts yet. On 2026-11-21
- * it asked six times for the first part of 1.8.4, the server answered 200 each time, and it gave up.
+ * Over 4G only to a board that can download there (FW_OVER_4G); an older one waits for a report over Wi-Fi.
  */
 export async function firmwareOffer({ store, latest, running, reason, alarmActive, battPct, viaWifi = true, now }) {
   if (!latest || !validVersion(latest.v) || !(latest.size > 0) || typeof latest.sig !== 'string') return null;
   if (!validVersion(running) || compareVersions(latest.v, running) <= 0) return null;
-  if (alarmActive || !QUIET_REASONS.has(reason) || !viaWifi) return null;
+  if (alarmActive || !QUIET_REASONS.has(reason)) return null;
+  if (!viaWifi && compareVersions(running, FW_OVER_4G) < 0) return null;
   if (typeof battPct === 'number' && battPct < FW_MIN_BATTERY) return null;
   const offer = await store.get('fw_offer');
   const same = offer?.v === latest.v;

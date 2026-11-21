@@ -78,6 +78,11 @@ struct State {
   char crashTo[20];      // a fall: the emergency contact, from the server ("" = detection off)
   char crashText[96];    // a fall: the board's own SMS when the server cannot be reached (+ map link)
   bool lowPower;         // «Χαμηλή κατανάλωση» in the app: the modem off while parked (1.8.2)
+  time_t standingSince;  // riding: since when the GPS sees the bike standing, 0 = rolling (1.8.5)
+  double standLat;       // where it stands
+  double standLon;
+  uint8_t uprightSamples;  // riding: readings at speed in `upright` since it was last learned anew (1.8.5)
+  uint8_t oddSamples;      // riding: readings at speed in a row far from upright (1.8.5)
 };
 
 constexpr uint32_t STATE_MAGIC = 0x4D4F5431;  // "MOT1"
@@ -91,6 +96,9 @@ Battery battery;
 // contact), the voltage fell too low, a crash, or the watchdog. Sent until a report gets through.
 // Values of esp_reset_reason(): 1 power on, 3 software, 4 crash, 5-7 watchdog, 9 brownout.
 RTC_DATA_ATTR uint8_t restartReason = 0;
+// The "+HTTPREAD" lines of the last answer over 4G, for the next report: how this modem frames its
+// data, which the firmware download over 4G depends on (1.8.6).
+RTC_DATA_ATTR char httpFraming[48] = "";
 
 struct Reply {
   bool ok = false;
@@ -262,6 +270,8 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
   doc["fw"] = FIRMWARE_VERSION;
   doc["wifiv"] = wifiListVersion();
   if (restartReason) doc["rst"] = restartReason;  // why the board started afresh this time
+  if (firmwareNote()[0]) doc["otaErr"] = firmwareNote();  // why the last update did not go in
+  if (httpFraming[0]) doc["hr"] = httpFraming;
   String out;
   serializeJson(doc, out);
   return out;
@@ -306,6 +316,9 @@ Reply sendReport(const char* reason, const Fix* fix, bool moving, float tilt) {
   reply.ok = true;
   st.lastViaWifi = viaWifi;
   keepNewFirmware();  // a new program that reached the server stays (nothing happens otherwise)
+  // What this report carried has arrived. This answer's own framing goes with the next one.
+  clearFirmwareNote();
+  strlcpy(httpFraming, viaWifi ? "" : modem.framing(), sizeof httpFraming);
   reply.armed = doc["armed"] | false;
   reply.track = doc["track"] | false;
   reply.locate = doc["locate"] | false;
@@ -585,10 +598,13 @@ void onTouch(const MotionResult& m) {
   }
 }
 
+void forgetUpright(const char* why);
+
 void park() {
   Serial.println("parked");
   takeReference();
   st.mode = Mode::Parked;
+  forgetUpright("parked");  // someone may open the seat or move the board before the next ride
   reportWithFix("parked", 0.0f, false);
 }
 
@@ -603,54 +619,102 @@ void keepRidePoint(const Fix& fix) {
 }
 
 // Riding fast: how gravity points when the bike is upright. In a turn the bike leans, but for the
-// sensor the push of the turn keeps it "upright", so a running average over the ride is that.
+// sensor the push of the turn keeps it "upright", so an average over the ride is that: a plain one
+// of the first readings after learning anew, then a running one.
 void learnUpright() {
   float g[3];
   if (!accel.sampleGravity(g)) return;
+  if (st.haveUpright && st.uprightSamples >= CRASH_LEARN_SAMPLES && Accel::angleDeg(g, st.upright) > CRASH_ODD_DEG) {
+    // Far from upright at speed: the bike going down (a fall's slide must not teach it upright: two
+    // such readings would take a 70° fall below CRASH_DOWN_DEG), or the board turned in its place.
+    // Only the latter goes on.
+    if (++st.oddSamples < CRASH_ODD_SAMPLES) return;
+    forgetUpright("it turned while riding");
+  }
+  st.oddSamples = 0;
   if (!st.haveUpright) {
     memcpy(st.upright, g, sizeof st.upright);
     st.haveUpright = true;
+    st.uprightSamples = 1;
     return;
   }
+  if (st.uprightSamples < 255) st.uprightSamples++;
+  const float w = st.uprightSamples < 5 ? 1.0f / st.uprightSamples : 0.2f;
   float m[3];
-  for (int k = 0; k < 3; k++) m[k] = st.upright[k] * 0.8f + g[k] * 0.2f;
+  for (int k = 0; k < 3; k++) m[k] = st.upright[k] * (1 - w) + g[k] * w;
   const float length = sqrtf(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
   if (length < 0.5f) return;
   for (int k = 0; k < 3; k++) st.upright[k] = m[k] / length;
 }
 
-// Riding: a fall. Shortly after moving at speed the bike lies on its side (far from upright) and
-// stays still for a few seconds. A hard stop, a pothole or the side stand never do all of that.
+// Upright is learned anew at speed, and until then no stop counts as a fall.
+void forgetUpright(const char* why) {
+  if (st.haveUpright) Serial.printf("fall: learning upright again (%s)\n", why);
+  st.haveUpright = false;
+  st.uprightSamples = 0;
+  st.oddSamples = 0;
+  downSince = 0;
+}
+
+// Metres between two nearby points (flat-earth approximation, fine for a few hundred metres).
+float metresApart(double lat1, double lon1, double lat2, double lon2) {
+  const double dy = (lat2 - lat1) * 111320.0;
+  const double dx = (lon2 - lon1) * 111320.0 * cos(lat1 * DEG_TO_RAD);
+  return static_cast<float>(sqrt(dx * dx + dy * dy));
+}
+
+// Riding: a fall. Riding at speed, or right after, the bike goes down on its side (far from upright)
+// and stays there for a few seconds. A hard stop, a pothole or the side stand never do all of that.
+// Going over only after standing for a while is no fall from riding: on 2026-11-21 the board turned
+// 113° in its place a minute after the bike was parked on a pavement, and that sounded as one; at
+// the next stop, with upright still half the old one, a second followed (65°).
 bool fallen(const Fix& fix) {
   const time_t now = clockNow();
   if (fix.valid && fix.speedKmh >= CRASH_FAST_KMH) {
     st.fastAt = now;
     st.fastKmh = fix.speedKmh;
     learnUpright();
+  }
+  if (fix.valid && fix.speedKmh >= RIDE_MOVING_KMH) {
+    st.standingSince = 0;
     downSince = 0;
+    return false;
+  }
+  // Standing, as the GPS sees it. Far from where it stood, it rolled while the board was busy (a
+  // report can take many seconds over a weak 4G), so the standing starts again from here.
+  if (fix.valid && (!st.standingSince ||
+                    metresApart(st.standLat, st.standLon, fix.lat, fix.lon) > CRASH_ROLLED_M + fix.acc)) {
+    st.standingSince = now;
+    st.standLat = fix.lat;
+    st.standLon = fix.lon;
+  }
+  if (!st.haveUpright) return false;
+  float g[3];
+  if (!accel.sampleGravity(g)) return false;
+  const float tilt = Accel::angleDeg(g, st.upright);
+  if (downSince) {  // it went down in time: only coming up again, or moving off, ends it
+    if (tilt < CRASH_DOWN_DEG) {
+      downSince = 0;
+      return false;
+    }
+    if (now - downSince < static_cast<time_t>(CRASH_DOWN_S)) return false;
+    downSince = 0;
+    crashInfo = CrashInfo();
+    crashInfo.open = true;
+    crashInfo.at = now;
+    crashInfo.kmh = st.fastKmh;
+    crashInfo.tilt = tilt;
+    return true;
+  }
+  if (st.standingSince && now - st.standingSince > static_cast<time_t>(CRASH_START_S)) {
+    // Standing for a while, and the board lies far from upright: it turned in its place, so upright
+    // no longer tells how the bike stands. The side stand is only about 10-15°.
+    if (tilt > CRASH_MOVED_DEG) forgetUpright("it turned while standing");
     return false;
   }
   const bool recent = st.fastAt && now - st.fastAt <= static_cast<time_t>(CRASH_RECENT_S);
-  if (!recent || (fix.valid && fix.speedKmh >= RIDE_MOVING_KMH) || (!st.haveUpright && !st.haveRef)) {
-    downSince = 0;
-    return false;
-  }
-  float g[3];
-  if (!accel.sampleGravity(g)) return false;
-  const float tilt = Accel::angleDeg(g, st.haveUpright ? st.upright : st.ref);
-  if (tilt < CRASH_DOWN_DEG) {
-    downSince = 0;
-    return false;
-  }
-  if (!downSince) downSince = now;
-  if (now - downSince < static_cast<time_t>(CRASH_DOWN_S)) return false;
-  downSince = 0;
-  crashInfo = CrashInfo();
-  crashInfo.open = true;
-  crashInfo.at = now;
-  crashInfo.kmh = st.fastKmh;
-  crashInfo.tilt = tilt;
-  return true;
+  if (recent && st.uprightSamples >= CRASH_LEARN_SAMPLES && tilt >= CRASH_DOWN_DEG) downSince = now;
+  return false;
 }
 
 // The board's own SMS to the emergency contact, when the server cannot be reached.

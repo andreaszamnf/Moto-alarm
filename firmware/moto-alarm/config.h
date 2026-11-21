@@ -2,7 +2,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FIRMWARE_VERSION "1.8.4"
+#define FIRMWARE_VERSION "1.8.6"
 
 // Modem pins, as in LilyGO's utilities.h for LILYGO_SIM7600X.
 constexpr int MODEM_RX_PIN = 26;      // the ESP32 receives from the modem here
@@ -39,6 +39,14 @@ constexpr float CRASH_FAST_KMH = 20;              // it moved at least this fast
 constexpr uint32_t CRASH_RECENT_S = 180;          // ... at most this long before
 constexpr float CRASH_DOWN_DEG = 50;              // fallen: this far from upright (on its side about 70-90)
 constexpr uint32_t CRASH_DOWN_S = 10;             // still down and still after this long: a fall
+// Going over only after standing longer than this (GPS) is no fall from riding (1.8.5): the board
+// turned 113° in its place a minute after the bike was parked on 2026-11-21.
+constexpr uint32_t CRASH_START_S = 15;
+constexpr float CRASH_ROLLED_M = 15;              // standing: further than this from where it stood, it rolled meanwhile
+constexpr float CRASH_MOVED_DEG = 30;             // standing that long, this far from upright: the board turned in its place
+constexpr uint8_t CRASH_LEARN_SAMPLES = 3;        // readings at speed before a newly learned upright counts
+constexpr float CRASH_ODD_DEG = 45;               // at speed, further than this from upright: not learned (a fall's slide) ...
+constexpr uint8_t CRASH_ODD_SAMPLES = 4;          // ... unless it goes on this many times: the board turned, learned anew
 constexpr float CRASH_RIDE_ON_KMH = 15;           // moving off again this fast: the rider is fine
 constexpr uint32_t CRASH_REPORT_S = 15;           // after a fall: a report this often
 constexpr uint32_t CRASH_LOCAL_SMS_S = 150;       // no server by then: the board texts the contact itself
