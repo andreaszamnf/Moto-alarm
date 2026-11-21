@@ -27,7 +27,7 @@ import {
 import { okCrash, startCrashTest } from './crash.js';
 import { cancelEmergency, listSounds, sendEmergency, validKey, validSound, validateUser } from './pushover.js';
 import { sendPush, vapidPublicKey } from './push.js';
-import { endStaleRide, rideView, tripList } from './rides.js';
+import { endStaleRide, rideSeconds, rideView, tripList } from './rides.js';
 import { FOLDER_DAYS, MAX_PHOTO_BYTES, bikeDetails, folderView, removePhoto, saveBike, savePhoto, startFolder, stopFolder } from './folder.js';
 import { LOAN_SPEED_CHOICES, setLoan } from './loan.js';
 import { morningSummary } from './morning.js';
@@ -492,7 +492,7 @@ async function route(request, env, ctx) {
     case 'GET /api/rides': {
       const now = Date.now();
       await endStaleRide(store, now);
-      return json({ ride: rideView(await store.get('ride'), now), trips: await tripList(store) });
+      return json({ ride: rideView(await store.get('ride'), now, rideSeconds(await loadSettings(store))), trips: await tripList(store) });
     }
 
     // Lent out (workshop, friend): { on, speedLimit }. No alarm meanwhile; see loan.js.

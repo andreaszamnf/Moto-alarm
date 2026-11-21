@@ -77,6 +77,7 @@ struct State {
   uint8_t smsResult;     // the last SMS since the last report: 0 none, 1 sent, 2 failed
   char crashTo[20];      // a fall: the emergency contact, from the server ("" = detection off)
   char crashText[96];    // a fall: the board's own SMS when the server cannot be reached (+ map link)
+  bool lowPower;         // «Χαμηλή κατανάλωση» in the app: the modem off while parked (1.8.2)
 };
 
 constexpr uint32_t STATE_MAGIC = 0x4D4F5431;  // "MOT1"
@@ -246,8 +247,18 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
     doc["via"] = "wifi";
     doc["wnet"] = wifiName();   // which of the known networks
     doc["wrssi"] = wifiRssi();  // how well the board hears it, dBm
+  } else if (wifiLastAttempt().fail != WifiFail::None) {
+    // Over 4G after the Wi-Fi did not work: why, for the app (1.8.1).
+    const WifiAttempt& wa = wifiLastAttempt();
+    JsonObject w = doc["wfail"].to<JsonObject>();
+    w["k"] = wifiFailName(wa.fail);
+    if (wa.ssid.length()) w["n"] = wa.ssid;
+    if (wa.rssi) w["s"] = wa.rssi;
+    if (wa.code) w["c"] = wa.code;
+    if (wa.seen >= 0) w["seen"] = wa.seen;
   }
   if (st.checkInS) doc["checkin"] = st.checkInS;  // the server expects to hear from it this often
+  if (st.lowPower) doc["eco"] = true;             // it keeps «Χαμηλή κατανάλωση»
   doc["fw"] = FIRMWARE_VERSION;
   doc["wifiv"] = wifiListVersion();
   if (restartReason) doc["rst"] = restartReason;  // why the board started afresh this time
@@ -271,6 +282,13 @@ Reply sendReport(const char* reason, const Fix* fix, bool moving, float tilt) {
     Serial.printf("wifi -> %s\n", json.c_str());
     status = wifiPost(SERVER_URL, DEVICE_KEY, json, body);
     Serial.printf("<- %d %s\n", status, body.c_str());
+    // Our server always answers JSON. Anything else came from the network itself (a login page of a
+    // café or hotel): the report has not arrived, so it goes over 4G.
+    if (status >= 0 && !body.startsWith("{")) {
+      wifiNoServer(status);
+      status = -1;
+      body = "";
+    }
     viaWifi = status >= 0;
   }
   if (status < 0 && modem.powerOn() && modem.waitForNetwork(SIM_APN, REGISTER_TIMEOUT_MS)) {
@@ -328,6 +346,7 @@ Reply sendReport(const char* reason, const Fix* fix, bool moving, float tilt) {
     accel.setSensitivity(st.sensitivity);
   }
   if (doc["touch"].is<bool>()) st.reportTouches = doc["touch"].as<bool>();
+  if (doc["eco"].is<bool>()) st.lowPower = doc["eco"].as<bool>();
   if (doc["wifi"]["v"].is<uint32_t>()) wifiSaveList(doc["wifi"]["v"].as<uint32_t>(), doc["wifi"]["nets"].as<JsonArrayConst>());
   restartReason = 0;  // told once
 
@@ -871,6 +890,9 @@ bool keepModemOnNetwork() {
   // and on 2026-11-20 that twice made the sensor feel a knock (the second time it sounded the alarm).
   // The Wi-Fi carries an alarm just as fast; the modem starts with the tracking, or if the Wi-Fi fails.
   if (st.mode == Mode::Parked && st.lastViaWifi) return false;
+  // «Χαμηλή κατανάλωση»: off while parked anywhere. Movement starts it again; the alarm then takes
+  // 15-20 seconds longer over 4G (over a known Wi-Fi it goes as fast as ever).
+  if (st.mode == Mode::Parked && st.lowPower) return false;
   if (battery.external) return true;  // on USB, or the charge is unknown
   return battery.mv >= CRITICAL_MV && battery.pct >= KEEP_ON_NETWORK_PCT;
 }

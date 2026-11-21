@@ -13,6 +13,23 @@ bool wifiConnect();
 bool wifiConnected();
 // POSTs JSON over HTTPS. Returns the HTTP status, or -1 when it did not get through.
 int wifiPost(const char* url, const char* bearer, const String& json, String& response);
+
+// Why reporting over Wi-Fi did not work this wake (1.8.1). It goes with the 4G report, so the app can
+// say it: no known network in reach, the password refused, joined without an address, or joined
+// but the server not reached (no internet, or a login page answering in its place).
+enum class WifiFail : uint8_t { None, NotFound, Password, Join, NoAddress, NoServer };
+struct WifiAttempt {
+  WifiFail fail = WifiFail::None;
+  String ssid;        // the known network it tried (the strongest one in reach)
+  int8_t rssi = 0;    // that network's signal in the scan, dBm
+  int16_t code = 0;   // the Wi-Fi disconnect reason, or the HTTP status or error for NoServer
+  int16_t seen = -1;  // networks the scan found in all, -1 when it did not scan
+};
+const WifiAttempt& wifiLastAttempt();
+const char* wifiFailName(WifiFail fail);  // as the report says it: "notfound", "password", ...
+// Something other than our server answered over Wi-Fi (a login page): the network is no use here,
+// so it is dropped for this wake and the report goes over 4G.
+void wifiNoServer(int code);
 // GETs a binary answer into `out` (at most `max` bytes). Returns its length, or -1.
 int wifiGet(const String& url, const char* bearer, uint8_t* out, size_t max);
 void wifiOff();

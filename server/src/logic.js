@@ -4,7 +4,7 @@
 import { crashReply, crashView, shortName } from './crash.js';
 import { compareVersions, firmwareEvents, firmwareOffer, validVersion } from './firmware.js';
 import { endLoan, loanNews, loanView } from './loan.js';
-import { RIDE_REPORT_SECONDS, endRide, normalizePoints, rideView, trackRide } from './rides.js';
+import { endRide, normalizePoints, rideSeconds, rideView, trackRide } from './rides.js';
 import { GOOGLE_PER_MONTH, googleUsage, normalizeWifi } from './wifiloc.js';
 
 export const DEFAULTS = Object.freeze({
@@ -26,7 +26,12 @@ export const DEFAULTS = Object.freeze({
   // A fall while riding: SMS to an emergency contact unless the owner says «Είμαι καλά» (crash.js).
   // name: the owner, as the contact knows them; contact: the contact's name, for the app's texts.
   crash: Object.freeze({ on: false, name: '', contact: '', phone: '' }),
+  // «Χαμηλή κατανάλωση»: a check-in every half hour (also on the bike's power), a ride report every
+  // minute, and the modem off while parked (firmware 1.8.2 on). An alarm still tracks as usual.
+  lowPower: false,
 });
+
+export const LOW_POWER_CHECKIN_MINUTES = 30;
 
 export const TIME_ZONE = 'Europe/Athens';
 export const PARK_RADIUS_CHOICES = Object.freeze([30, 50, 100, 200]);
@@ -68,13 +73,37 @@ export function normalizeFix(fix, now) {
   return { ts, lat, lon, acc: finite(fix.acc), speed: finite(fix.spd) };
 }
 
+// Only the board's own reading (its divider on GPIO35) shows the charge. On USB (a charger, the
+// bike's power) LilyGO cuts that divider, and the modem's supply voltage the board sends instead
+// (src 'modem') does not follow the cell: on 2026-11-20 it stayed at 3.871 V (66%) through more than
+// an hour of charging a flat battery. So that one is kept as a voltage for diagnosis, not as a charge.
 function normalizeBattery(batt) {
   if (!batt || typeof batt !== 'object') return null;
+  const adc = finite(batt.adc); // the divider's own reading, for diagnosis
+  if (batt.src === 'modem') {
+    const out = { pct: null, mv: null };
+    if (finite(batt.mv) !== null) out.modemMv = finite(batt.mv);
+    if (adc !== null) out.adc = adc;
+    return out;
+  }
   const pct = finite(batt.pct);
   const out = { pct: pct === null || pct < 0 ? null : Math.max(0, Math.min(100, Math.round(pct))), mv: finite(batt.mv) };
-  if (batt.src === 'modem') out.src = 'modem'; // the board's divider read nothing; the modem measured it
-  if (finite(batt.adc) !== null) out.adc = finite(batt.adc); // the divider's own reading, for diagnosis
+  if (adc !== null) out.adc = adc;
   return out;
+}
+
+// Why the board's Wi-Fi did not work, sent with a 4G report (firmware 1.8.1 on): no known network
+// in reach, the password refused, joined but no address, joined but the server not reached.
+const WIFI_FAILS = new Set(['notfound', 'password', 'join', 'noip', 'noserver']);
+function normalizeWifiFail(w) {
+  if (!w || typeof w !== 'object' || !WIFI_FAILS.has(w.k)) return null;
+  return {
+    k: w.k,
+    n: typeof w.n === 'string' && w.n ? w.n.slice(0, 32) : null, // the network it tried
+    s: finite(w.s), // its signal, dBm
+    c: finite(w.c), // the Wi-Fi reason or HTTP status, for diagnosis
+    seen: finite(w.seen), // networks around in all
+  };
 }
 
 export function alarmText(reason, metres) {
@@ -120,6 +149,7 @@ export async function updateSettings(store, patch, now = Date.now()) {
   if (PARK_RADIUS_CHOICES.includes(patch?.parkRadius)) saved.parkRadius = patch.parkRadius;
   if ([1, 2, 3].includes(patch?.sensitivity)) saved.sensitivity = patch.sensitivity;
   if (typeof patch?.touchAlerts === 'boolean') saved.touchAlerts = patch.touchAlerts;
+  if (typeof patch?.lowPower === 'boolean') saved.lowPower = patch.lowPower;
   if (PARK_ACTIONS.includes(patch?.parkAction)) saved.parkAction = patch.parkAction;
   const phone = normalizePhone(patch?.callNumber);
   if (phone !== null) saved.callNumber = phone;
@@ -332,9 +362,11 @@ export async function handleReport({
     via: report?.via === 'wifi' ? 'wifi' : '4g',
     wifiName: report?.via === 'wifi' && typeof report?.wnet === 'string' ? report.wnet.slice(0, 32) : null,
     wifiRssi: report?.via === 'wifi' ? finite(report?.wrssi) : null,
+    wifiFail: report?.via === 'wifi' ? null : normalizeWifiFail(report?.wfail),
     checkin: finite(report?.checkin), // seconds between its check-ins, when it does them
     // Powered by the bike (its 12 V through a 5 V converter, seen by the board as USB), firmware 1.7.0 on.
     ext: typeof report?.ext === 'boolean' ? report.ext : null,
+    eco: report?.eco === true, // the board keeps «Χαμηλή κατανάλωση» (firmware 1.8.2 on)
   });
   await firmwareEvents({ store, before: deviceBefore?.fw ?? null, running, now });
   // The board started afresh instead of waking from its sleep: power came back, the voltage
@@ -483,6 +515,7 @@ export async function handleReport({
     reason,
     alarmActive: Boolean(alarm.active),
     battPct: batt?.pct ?? null,
+    viaWifi: report?.via === 'wifi',
     now,
   });
 
@@ -495,10 +528,12 @@ export async function handleReport({
     track: Boolean(armed.armed && alarm.active),
     locate,
     heartbeat: testing ? SIGNAL_TEST_HEARTBEAT_S : settings.heartbeatMinutes * 60,
-    // On the bike's power a check-in costs no battery, so more often.
-    checkin: (extNow ? settings.checkInPoweredMinutes : settings.checkInMinutes) * 60,
+    // On the bike's power a check-in costs no battery, so more often; with «Χαμηλή κατανάλωση» every
+    // half hour either way (also spares the bike's own battery when it stands for weeks).
+    checkin: (settings.lowPower ? LOW_POWER_CHECKIN_MINUTES : extNow ? settings.checkInPoweredMinutes : settings.checkInMinutes) * 60,
     trackInterval: settings.trackSeconds,
-    rideInterval: RIDE_REPORT_SECONDS, // firmware 1.6.0 and later
+    rideInterval: rideSeconds(settings), // firmware 1.6.0 and later
+    eco: settings.lowPower === true, // the modem off while parked (firmware 1.8.2 and later)
     t: Math.floor(now / 1000),
     sens: settings.sensitivity,
     touch: settings.touchAlerts,
@@ -551,9 +586,19 @@ export async function removeWifiNetwork({ store, ssid }) {
   return wifiView(nets, await store.get('device'));
 }
 
-// For the app: the names, and whether the board already has the latest list.
+// For the app: the names, whether the board already has the latest list, and how its last report
+// went: over which Wi-Fi, or over 4G and why the Wi-Fi did not work (firmware 1.8.1 on).
 function wifiView(nets, device) {
-  return { names: nets.list.map((n) => n.ssid), synced: !nets.v || device?.wifiv === nets.v };
+  const viaWifi = device?.via === 'wifi';
+  return {
+    names: nets.list.map((n) => n.ssid),
+    synced: !nets.v || device?.wifiv === nets.v,
+    at: device?.lastSeen ?? null,
+    via: device?.lastSeen ? (viaWifi ? 'wifi' : '4g') : null,
+    name: viaWifi ? device?.wifiName ?? null : null,
+    rssi: viaWifi ? device?.wifiRssi ?? null : null,
+    fail: viaWifi ? null : device?.wifiFail ?? null,
+  };
 }
 
 export async function setArmed({ store, armed, now = Date.now(), by = null, cancel = async () => {} }) {
@@ -756,7 +801,7 @@ export async function snapshot(store, now = Date.now()) {
     // How long it may stay silent and still count as in touch (see contactWindowMs).
     contactMs: contactWindowMs(device, alarm, settings),
     // The ride under way: speed, distance and time so far (null when not riding).
-    ride: rideView(ride, now),
+    ride: rideView(ride, now, rideSeconds(settings)),
     // Lent out (workshop, friend): since when and its rides so far (null when not lent).
     loan: await loanView(store, now),
     // A fall while riding, waiting for «Είμαι καλά» or after the SMS (null when none is open).
@@ -856,20 +901,24 @@ export function timeAgoText(ms, now = Date.now()) {
 export function quickStatus(snap) {
   const armed = Boolean(snap.armed?.armed);
   const alarm = Boolean(snap.alarm?.active);
-  const battery = snap.device?.batt?.pct ?? null;
+  // On USB the board cannot measure its battery: just "charging", no percentage or forecast.
+  const charging = snap.device?.ext === true;
+  const battery = charging ? null : snap.device?.batt?.pct ?? null;
   const lastSeen = snap.device?.lastSeen ?? null;
   const lastSeenText = lastSeen ? `επαφή ${timeAgoText(lastSeen, snap.now)}` : 'καμία επαφή ακόμα';
   const rssi = snap.device?.rssi ?? null;
   const state = alarm ? 'ΣΥΝΑΓΕΡΜΟΣ' : armed ? 'Οπλισμένος' : 'Αφοπλισμένος';
   const parts = [state];
-  if (battery !== null) parts.push(`μπαταρία ${battery}%`);
+  if (charging) parts.push('φορτίζει');
+  else if (battery !== null) parts.push(`μπαταρία ${battery}%`);
   parts.push(lastSeenText);
   const p = snap.position;
   return {
     armed,
     alarm,
     battery,
-    forecast: snap.forecast?.text ?? null,
+    charging,
+    forecast: charging ? null : snap.forecast?.text ?? null,
     rssi,
     signal: signalText(rssi),
     bars: signalBars(rssi),

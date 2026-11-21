@@ -106,7 +106,7 @@
           <dl class="stats">
             <div><dt>Μπαταρία</dt><dd id="st-battery">—</dd><dd id="st-forecast" class="forecast" hidden></dd></div>
             <div><dt>Σήμα</dt><dd id="st-signal">—</dd><dd id="st-net" class="forecast net" hidden></dd></div>
-            <div><dt>Επαφή</dt><dd id="st-seen">—</dd></div>
+            <div><dt>Επαφή</dt><dd id="st-seen">—</dd><dd id="st-eco" class="forecast" hidden>χαμηλή κατανάλωση</dd></div>
           </dl>
         </section>
 
@@ -131,6 +131,35 @@
             <div><dt>Μέγιστη</dt><dd id="ride-max">—</dd></div>
           </dl>
           <p id="ride-age" class="muted ride-age"></p>
+        </section>
+
+        <!-- One past ride, drawn on the map: its details and its speed all the way (ride.js). -->
+        <section id="trip-card" class="card trip-card" aria-label="Διαδρομή" hidden>
+          <div class="card-head">
+            <h2 id="trip-title">Διαδρομή</h2>
+            <button id="btn-trip-close" type="button" class="link-btn">Κλείσιμο</button>
+          </div>
+          <dl class="stats trip-stats">
+            <div><dt>Απόσταση</dt><dd id="trip-km">—</dd></div>
+            <div><dt>Σε κίνηση</dt><dd id="trip-moving">—</dd></div>
+            <div><dt>Συνολικά</dt><dd id="trip-total">—</dd><dd id="trip-stopped" class="forecast"></dd></div>
+            <div><dt>Μέση</dt><dd id="trip-avg">—</dd></div>
+            <div><dt>Μέγιστη</dt><dd id="trip-max">—</dd><dd id="trip-max-at" class="forecast"></dd></div>
+            <div><dt>Στάσεις</dt><dd id="trip-stops">—</dd></div>
+          </dl>
+          <figure id="trip-chart-wrap" class="trip-chart">
+            <figcaption>Ταχύτητα σε όλη τη διαδρομή <span class="muted">· σύρε το δάχτυλο πάνω της για να δεις το σημείο στον χάρτη</span></figcaption>
+            <div class="trip-chart-box">
+              <svg id="trip-chart" role="img" tabindex="0" aria-label="Η ταχύτητα σε όλη τη διαδρομή"></svg>
+              <div id="trip-tip" class="trip-tip" hidden><strong></strong><span></span></div>
+            </div>
+          </figure>
+          <div id="trip-bands" class="trip-bands">
+            <h3>Χρόνος ανά ταχύτητα (χλμ/ώ)</h3>
+            <div id="trip-bands-bar" class="bands-bar" aria-hidden="true"></div>
+            <ul id="trip-bands-legend" class="bands-legend"></ul>
+          </div>
+          <p id="trip-stops-list" class="muted"></p>
         </section>
 
         <section class="actions" aria-label="Ενέργειες">
@@ -256,6 +285,11 @@
           <button type="button" class="menu-row" data-page="wifi">
             <span class="menu-icon" aria-hidden="true">📶</span>
             <span class="menu-text"><strong>Wi-Fi της πλακέτας</strong><small id="sum-wifi"></small></span>
+            <span class="chev" aria-hidden="true">›</span>
+          </button>
+          <button type="button" class="menu-row" data-page="power">
+            <span class="menu-icon" aria-hidden="true">🔋</span>
+            <span class="menu-text"><strong>Κατανάλωση</strong><small id="sum-power"></small></span>
             <span class="chev" aria-hidden="true">›</span>
           </button>
         </div>
@@ -541,10 +575,31 @@
         <label>Ώρα <input id="set-morning-time" type="time" step="300"></label>
       </section>
 
+      <section class="settings-page" data-page="power" hidden>
+        <p class="muted">Η πλακέτα καταλαβαίνει μόνη της αν είναι στο ρεύμα (καλώδιο από τη μηχανή ή φορτιστή) ή στη μπαταρία της, και αλλάζει ρυθμό: στο ρεύμα στέλνει «είμαι εδώ» κάθε 5 λεπτά, στη μπαταρία της κάθε 15. Δίπλα σε γνωστό Wi-Fi το modem είναι κλειστό έτσι κι αλλιώς.</p>
+        <label class="check">
+          <input id="set-lowpower" type="checkbox">
+          <span>Χαμηλή κατανάλωση
+            <small class="muted">Για όταν θέλεις να κρατήσει περισσότερο η μπαταρία της, ή τον χειμώνα, για να μην αδειάζει τη μπαταρία της μηχανής.</small></span>
+        </label>
+        <p id="power-sync" class="muted" hidden></p>
+        <details>
+          <summary>Τι αλλάζει όταν είναι ανοιχτή</summary>
+          <ul>
+            <li>«Είμαι εδώ» κάθε μισή ώρα, και όταν είναι στο ρεύμα.</li>
+            <li>Στη βόλτα στέλνει κάθε λεπτό αντί για κάθε 15 δευτερόλεπτα. Η διαδρομή κρατάει όλα τα σημεία της· απλώς η κάρτα «Οδηγείς τώρα» ανανεώνεται κάθε λεπτό.</li>
+            <li>Παρκαρισμένη, το modem κλείνει και μακριά από γνωστό Wi-Fi. Ο συναγερμός από 4G φτάνει 15–20 δευτερόλεπτα αργότερα· από Wi-Fi το ίδιο γρήγορα.</li>
+            <li>Η ειδοποίηση ότι σταμάτησε να στέλνει έρχεται μετά από περίπου μία ώρα, αντί για περίπου 35 λεπτά.</li>
+            <li>Στον συναγερμό δεν αλλάζει τίποτα: στέλνει θέση κάθε 30 δευτερόλεπτα όπως πάντα. Ούτε η ανίχνευση πτώσης αλλάζει.</li>
+          </ul>
+        </details>
+      </section>
+
       <section class="settings-page" data-page="wifi" hidden>
         <p class="muted">Όπου πιάνει ένα από αυτά τα Wi-Fi, η πλακέτα στέλνει από εκεί αντί για 4G: πιο γρήγορα, και εκεί που δεν πιάνει το κινητό. Δοκιμάζει πρώτα αυτό που δούλεψε την τελευταία φορά, αλλιώς το πιο δυνατό που βρίσκει. Μέχρι 5 δίκτυα.</p>
         <ul id="wifi-list" class="wifi-list"></ul>
         <p id="wifi-sync" class="muted" hidden></p>
+        <p id="wifi-status" hidden></p>
         <p class="muted">Η πλακέτα μαθαίνει τις αλλαγές με την επόμενη αναφορά της, άρα πρόσθεσε ένα δίκτυο όσο εκείνη έχει σύνδεση (π.χ. στο σπίτι). Ο κωδικός μένει στον server και στην πλακέτα και δεν ξαναφαίνεται εδώ. Το Wi-Fi που μπήκε από τον υπολογιστή μένει κι αυτό στην πλακέτα.</p>
         <label>Όνομα του Wi-Fi <input id="wifi-ssid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="32" placeholder="όπως φαίνεται στο κινητό"></label>
         <label>Κωδικός <input id="wifi-pass" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="63"></label>

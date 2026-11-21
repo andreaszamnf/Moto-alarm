@@ -19,7 +19,8 @@ test('versions are compared as numbers', () => {
 
 function setup() {
   const store = new MemoryStore();
-  const report = (r, now, firmware = LATEST) => handleReport({ store, report: r, now, firmware });
+  // Over Wi-Fi unless a test says otherwise: only then is an update offered.
+  const report = (r, now, firmware = LATEST) => handleReport({ store, report: { via: 'wifi', ...r }, now, firmware });
   return { store, report };
 }
 
@@ -30,6 +31,7 @@ test('new firmware is offered only to an older board, parked and calm, with enou
   assert.equal((await report({ reason: 'ride', fw: '1.1.0' }, T0)).update, undefined, 'not while riding');
   assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0', batt: { pct: 20 } }, T0)).update, undefined, 'not on a low battery');
   assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0' }, T0, null)).update, undefined, 'nothing published');
+  assert.equal((await report({ reason: 'heartbeat', fw: '1.1.0', via: '4g' }, T0)).update, undefined, 'not over 4G: the board cannot read the parts there yet');
 
   const res = await report({ reason: 'heartbeat', fw: '1.1.0', batt: { pct: 80 } }, T0);
   assert.deepEqual(res.update, LATEST);

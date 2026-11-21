@@ -161,7 +161,10 @@ function details(stack, s, size, onRed) {
   }
   stack.addSpacer(5);
   const text = onRed ? C.white : C.text;
-  if (s.battery !== null) {
+  if (s.charging) {
+    row(stack, 'battery.100.bolt', 'Φορτίζει', text, size, false);
+    stack.addSpacer(3);
+  } else if (s.battery !== null) {
     const forecast = s.forecast ? ' · ' + s.forecast.replace('περίπου ', '~') : '';
     row(stack, batterySymbol(s.battery), s.battery + '%' + forecast, text, size, false);
     stack.addSpacer(3);
@@ -182,7 +185,7 @@ async function widgetFor(s, family) {
 
   // Lock screen
   if (family === 'accessoryInline') {
-    w.addText(stateLabel(s) + (s.battery !== null ? ' · ' + s.battery + '%' : ''));
+    w.addText(stateLabel(s) + (s.charging ? ' · φορτίζει' : s.battery !== null ? ' · ' + s.battery + '%' : ''));
     return w;
   }
   if (family === 'accessoryCircular') {
@@ -190,9 +193,10 @@ async function widgetFor(s, family) {
     const icon = w.addImage(SFSymbol.named(stateSymbol(s)).image);
     icon.imageSize = new Size(20, 20);
     icon.centerAlignImage();
-    if (s.battery !== null) {
-      const t = w.addText(s.battery + '%');
+    if (s.charging || s.battery !== null) {
+      const t = w.addText(s.charging ? 'φορτίζει' : s.battery + '%');
       t.font = Font.boldSystemFont(11);
+      t.minimumScaleFactor = 0.6;
       t.centerAlignText();
     }
     return w;
@@ -200,7 +204,7 @@ async function widgetFor(s, family) {
   if (family === 'accessoryRectangular') {
     const t = w.addText(stateLabel(s));
     t.font = Font.boldSystemFont(14);
-    const b = w.addText((s.battery !== null ? 'Μπαταρία ' + s.battery + '% · ' : '') + contact(s));
+    const b = w.addText((s.charging ? 'Φορτίζει · ' : s.battery !== null ? 'Μπαταρία ' + s.battery + '% · ' : '') + contact(s));
     b.font = Font.systemFont(12);
     b.minimumScaleFactor = 0.7;
     return w;

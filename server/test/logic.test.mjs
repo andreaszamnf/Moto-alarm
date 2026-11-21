@@ -379,6 +379,18 @@ test('widget status carries the map position, signal and battery forecast', asyn
   assert.equal(status.signal, 'μέτριο');
   assert.equal(status.bars, 2);
   assert.equal(status.battery, 70);
+  assert.equal(status.charging, false);
+});
+
+test('widget status on USB says "charging" instead of a percentage', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'parked', fix: PARK, batt: { pct: 40, mv: 3740 }, ext: false }, T0);
+  await report({ reason: 'checkin', batt: { mv: 3871, pct: 66, src: 'modem', adc: 284 }, ext: true }, T0 + min(5));
+  const status = quickStatus(await snapshot(store, T0 + min(6)));
+  assert.equal(status.charging, true);
+  assert.equal(status.battery, null);
+  assert.equal(status.forecast, null);
+  assert.equal(status.text, 'Αφοπλισμένος · φορτίζει · επαφή πριν 1 λεπτό');
 });
 
 test('the loud Pushover alarm goes out once per alarm, again when the bike leaves, and stops when seen', async () => {
@@ -454,17 +466,59 @@ test('signal test: every report is logged, and during the test the device report
   assert.equal(view.log[0].ts, T0 + min(71), 'newest first');
 });
 
-test('a battery measured by the modem is kept with the board reading that failed, and a warm modem is logged', async () => {
+test('on USB the modem voltage is kept for diagnosis, not as a charge, and a warm modem is logged', async () => {
   const { store, report } = setup();
-  await report({ reason: 'motion', batt: { mv: 3910, pct: 64, src: 'modem', adc: 140 }, net: { op: 'NOVA', reg: 0, warm: true } }, T0);
+  // 2026-11-20: a flat battery on a charger, and the modem said 3.871 V (66%) for over an hour.
+  await report({ reason: 'motion', ext: true, batt: { mv: 3871, pct: 66, src: 'modem', adc: 284 }, net: { op: 'NOVA', reg: 0, warm: true } }, T0);
   const device = await store.get('device');
-  assert.deepEqual(device.batt, { pct: 64, mv: 3910, src: 'modem', adc: 140 });
+  assert.deepEqual(device.batt, { pct: null, mv: null, modemMv: 3871, adc: 284 });
+  assert.equal((await store.get('batt_log')) ?? null, null, 'not a reading of the battery');
   assert.equal((await store.get('signal_last')).warm, true);
   await report({ reason: 'heartbeat', batt: { adc: 0 }, net: { op: 'NOVA', reg: 40 } }, T0 + min(5));
   assert.deepEqual((await store.get('device')).batt, { pct: null, mv: null, adc: 0 });
   assert.equal((await store.get('signal_last')).warm, false);
   await report({ reason: 'motion', via: 'wifi', batt: { adc: 0 } }, T0 + min(6));
   assert.equal((await store.get('signal_last')).via, 'wifi');
+});
+
+test('«Χαμηλή κατανάλωση»: a check-in every half hour, a ride report every minute, the modem off while parked', async () => {
+  const { store, report } = setup();
+  let res = await report({ reason: 'checkin', ext: false }, T0);
+  assert.deepEqual([res.checkin, res.rideInterval, res.eco], [900, 15, false]);
+  res = await report({ reason: 'checkin', ext: true }, T0 + min(1));
+  assert.equal(res.checkin, 300, 'on the bike\'s power every 5 minutes');
+
+  await updateSettings(store, { lowPower: true }, T0 + min(2));
+  res = await report({ reason: 'checkin', ext: true }, T0 + min(3));
+  assert.deepEqual([res.checkin, res.rideInterval, res.eco], [1800, 60, true], 'also on the bike\'s power');
+  await report({ reason: 'checkin', ext: false, eco: true, checkin: 1800 }, T0 + min(4));
+  let snap = await snapshot(store, T0 + min(5));
+  assert.equal(snap.device.eco, true, 'the board says it keeps it');
+  assert.equal(snap.contactMs, 1800 * 2000 + 5 * 60_000, 'lost contact counts after about an hour');
+
+  await report({ reason: 'motion', moving: true, eco: true }, T0 + min(6));
+  snap = await snapshot(store, T0 + min(6));
+  assert.equal(snap.ride.every, 60, 'the ride card knows the board reports every minute');
+
+  await updateSettings(store, { lowPower: 'yes' }, T0 + min(7));
+  assert.equal((await snapshot(store, T0 + min(7))).settings.lowPower, true, 'only true or false changes it');
+  await updateSettings(store, { lowPower: false }, T0 + min(8));
+  res = await report({ reason: 'checkin', ext: false }, T0 + min(9));
+  assert.deepEqual([res.checkin, res.rideInterval, res.eco], [900, 15, false], 'back to normal');
+});
+
+test('Wi-Fi: a 4G report says why the Wi-Fi did not work, a report over Wi-Fi clears it', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'checkin', wfail: { k: 'password', n: 'Kafe', s: -61, c: 15, seen: 9 } }, T0);
+  let wifi = (await snapshot(store, T0 + min(1))).wifi;
+  assert.equal(wifi.via, '4g');
+  assert.equal(wifi.at, T0);
+  assert.deepEqual(wifi.fail, { k: 'password', n: 'Kafe', s: -61, c: 15, seen: 9 });
+  await report({ reason: 'checkin', wfail: { k: 'nonsense', n: 'Kafe' } }, T0 + min(5));
+  assert.equal((await snapshot(store, T0 + min(6))).wifi.fail, null, 'an unknown reason is dropped');
+  await report({ reason: 'checkin', via: 'wifi', wnet: 'Kafe', wrssi: -60, wfail: { k: 'password' } }, T0 + min(10));
+  wifi = (await snapshot(store, T0 + min(11))).wifi;
+  assert.deepEqual([wifi.via, wifi.name, wifi.rssi, wifi.fail], ['wifi', 'Kafe', -60, null]);
 });
 
 test('armed: movement that begins after "seen" sounds the alarm again, ongoing movement does not', async () => {

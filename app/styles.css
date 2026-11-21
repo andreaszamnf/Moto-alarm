@@ -10,6 +10,13 @@
   --warn: #b45309;
   --danger: #dc2626;
   --on-danger: #ffffff;
+  /* Speed of a past ride, slow to fast: one blue, light to dark (checked as an ordinal ramp
+     against both card surfaces and the map outline). */
+  --speed-0: #86b6ef;
+  --speed-1: #3987e5;
+  --speed-2: #256abf;
+  --speed-3: #184f95;
+  --speed-line: #2a78d6;
   color-scheme: light;
 }
 
@@ -24,6 +31,7 @@
     --ok: #4ade80;
     --warn: #fbbf24;
     --danger: #ef4444;
+    --speed-line: #3987e5;
     color-scheme: dark;
   }
 }
@@ -137,6 +145,7 @@ main {
 .status-card { order: 2; }
 .map-wrap { order: 3; }
 .ride-card, .loan-card { order: 2; }
+.trip-card { order: 3; } /* right under the map on a phone; under the status beside it on a wide screen */
 .actions { order: 4; }
 .service-row { order: 5; }
 .history { order: 6; }
@@ -207,6 +216,23 @@ body.alarm-live .bike-marker span { animation: ping 1s ease-out infinite; }
 .bike-marker.is-rough span { opacity: 0.75; border-style: dashed; }
 .route-line { stroke: var(--accent); stroke-width: 4; stroke-opacity: 0.85; fill: none; }
 .trail-line { stroke: var(--danger); stroke-width: 4; fill: none; }
+/* A past ride: an outline in the map's own background, the route in the blue of its speed, and
+   round markers with a ring (start white, end dark, stops small and white, the top speed dark blue). */
+.trip-casing { stroke: #ffffff; stroke-width: 9; stroke-opacity: 0.95; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.map-dark .trip-casing { stroke: #131924; }
+.trip-seg { stroke-width: 5; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.trip-seg.b0 { stroke: var(--speed-0); }
+.trip-seg.b1 { stroke: var(--speed-1); }
+.trip-seg.b2 { stroke: var(--speed-2); }
+.trip-seg.b3 { stroke: var(--speed-3); }
+.trip-pin { stroke: #ffffff; stroke-width: 2; fill-opacity: 1; }
+.trip-start { fill: #ffffff; stroke: #111827; stroke-width: 3; }
+.trip-end { fill: #111827; }
+.trip-stop { fill: #ffffff; stroke: #5b6472; stroke-width: 2.5; }
+.trip-max { fill: var(--speed-3); stroke-width: 2.5; }
+.trip-scrub { fill: var(--accent); stroke-width: 3; }
+.leaflet-tooltip.trip-label { padding: 3px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: 600 0.8rem/1.3 system-ui, sans-serif; box-shadow: 0 1px 6px rgb(0 0 0 / 0.25); }
+.leaflet-tooltip.trip-label::before { display: none; }
 
 /* Toast and dialog */
 .toast {
@@ -287,6 +313,7 @@ input:disabled { opacity: 0.5; }
 .quick textarea { width: 100%; font: 0.8rem/1.4 ui-monospace, monospace; padding: 8px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 details { background: var(--surface-2); border-radius: 10px; padding: 8px 12px; }
 details summary { cursor: pointer; font-weight: 600; }
+details ul { display: grid; gap: 6px; margin: 8px 0 2px; padding-left: 18px; font-size: 0.9rem; }
 details ol { margin: 8px 0 4px; padding-left: 20px; display: grid; gap: 4px; }
 dialog { max-height: calc(100dvh - 32px); overflow: auto; }
 
@@ -443,6 +470,45 @@ button.svc-tile:hover { background: color-mix(in srgb, var(--surface-2) 75%, var
 .trip { display: grid; justify-items: start; gap: 2px; width: 100%; min-height: 56px; padding: 10px 14px; border: 0; border-top: 1px solid var(--border); border-radius: 0; background: var(--surface); text-align: left; }
 .trips li:first-child .trip { border-top: 0; }
 .trip small { color: var(--muted); }
+
+/* The card of a past ride under the map */
+.trip-card { display: grid; gap: 12px; }
+.trip-card h2 { font-size: 1.05rem; }
+.trip-card h3 { margin: 0 0 6px; font-size: 0.85rem; font-weight: 600; }
+.trip-card p { margin: 0; }
+.trip-chart { margin: 0; }
+.trip-chart figcaption { margin-bottom: 4px; font-size: 0.85rem; font-weight: 600; }
+.trip-chart figcaption .muted { font-size: 0.8rem; font-weight: 400; }
+.trip-chart-box { position: relative; }
+#trip-chart { display: block; width: 100%; height: 196px; overflow: visible; touch-action: pan-y; cursor: crosshair; border-radius: 10px; }
+#trip-chart:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+#trip-chart .grid { stroke: var(--border); stroke-width: 1; }
+#trip-chart .axis { stroke: var(--muted); stroke-width: 1; opacity: 0.6; }
+#trip-chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+#trip-chart .area { fill: var(--speed-line); fill-opacity: 0.14; stroke: none; }
+#trip-chart .line { fill: none; stroke: var(--speed-line); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+#trip-chart .peak { fill: var(--speed-3); stroke: var(--surface); stroke-width: 2; }
+#trip-chart .peak-label { fill: var(--text); font-size: 11px; font-weight: 700; }
+#trip-chart .cross { stroke: var(--muted); stroke-width: 1; }
+#trip-chart .cross-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.trip-tip { position: absolute; top: 2px; left: 0; transform: translateX(-50%); display: grid; justify-items: center; padding: 4px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 2px 10px rgb(0 0 0 / 0.2); pointer-events: none; white-space: nowrap; }
+.trip-tip strong { font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+.trip-tip span { color: var(--muted); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.bands-bar { display: flex; gap: 2px; height: 14px; }
+.bands-bar .band { min-width: 4px; border-radius: 0; }
+.bands-bar .band:first-child { border-radius: 4px 0 0 4px; }
+.bands-bar .band:last-child { border-radius: 0 4px 4px 0; }
+.bands-bar .band:only-child { border-radius: 4px; }
+.band.b0 { background: var(--speed-0); }
+.band.b1 { background: var(--speed-1); }
+.band.b2 { background: var(--speed-2); }
+.band.b3 { background: var(--speed-3); }
+.bands-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 0.85rem; }
+.bands-legend li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bands-legend i { flex: none; width: 12px; height: 12px; border-radius: 3px; }
+.bands-legend span { color: var(--muted); }
+.bands-legend strong { margin-left: auto; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 420px) { .bands-legend { grid-template-columns: 1fr; } }
 dialog.speedo { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; border-radius: 0; background: var(--bg); }
 .speedo-body { display: grid; grid-template-rows: 1fr auto auto auto; gap: 16px; height: 100%; padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); }
 .speedo-speed { display: grid; place-content: center; text-align: center; }

@@ -62,7 +62,7 @@ function showValue(id, value, prop = 'value') {
   el[prop] = value;
 }
 
-function olderThan(version, wanted) {
+export function olderThan(version, wanted) {
   const a = String(version ?? '').split('.').map(Number);
   const b = wanted.split('.').map(Number);
   for (let i = 0; i < 3; i++) if ((a[i] || 0) !== b[i]) return (a[i] || 0) < b[i];

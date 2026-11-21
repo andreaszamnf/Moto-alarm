@@ -5,6 +5,8 @@
 import { distanceM } from './logic.js';
 
 export const RIDE_REPORT_SECONDS = 15; // sent to the board: how often to report while riding
+export const LOW_POWER_RIDE_SECONDS = 60; // the same with «Χαμηλή κατανάλωση» on (the points stay every 3 s)
+export const rideSeconds = (settings) => (settings?.lowPower ? LOW_POWER_RIDE_SECONDS : RIDE_REPORT_SECONDS);
 export const RIDE_GAP_MS = 15 * 60_000; // nothing heard for this long: the ride is over
 export const MOVING_KMH = 5; // slower than this is standing (a red light, GPS drift)
 const MIN_RIDE_M = 300; // shorter: pushing the bike around the garage, not a ride
@@ -107,18 +109,24 @@ export async function trackRide({ store, reason, points, armed, now }) {
   if (!ride && !riding) return { started: false, ride: null, ended: stale };
   const started = !ride;
   if (!ride) ride = { start: points[0]?.ts ?? now, last: now, m: 0, movingS: 0, max: 0, n: 0, prev: null, speed: null };
-  for (const p of points) addPoint(ride, p);
+  for (const p of points) {
+    // Points taken before the report that started the ride got through still belong to it: the
+    // ride's route and details are looked up from its start.
+    if (p.ts < ride.start) ride.start = p.ts;
+    addPoint(ride, p);
+  }
   ride.last = now;
   await store.set('ride', ride);
   if (armed || reason === 'parked') return { started, ride: null, ended: await endRide(store, now) };
   return { started, ride, ended: stale };
 }
 
-/** The ride under way, for the app: null when there is none. */
-export function rideView(ride, now = Date.now()) {
+/** The ride under way, for the app: null when there is none. `every`: seconds between the board's reports. */
+export function rideView(ride, now = Date.now(), every = RIDE_REPORT_SECONDS) {
   if (!ride || now - ride.last > RIDE_GAP_MS) return null;
   return {
     ...rideSummary(ride),
+    every,
     last: ride.last, // when the board last reported
     at: ride.prev?.ts ?? null, // when the newest point was taken
     speed: ride.speed ?? null,

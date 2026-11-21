@@ -199,6 +199,13 @@ test('morning: one quiet summary after 08:00, about the night', async () => {
   assert.equal(await store.get('touch_tally'), null, 'touches counted afresh');
 });
 
+test('morning: on USB it says "charging", not the modem voltage as a percentage', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'checkin', fix: START, batt: { mv: 3871, pct: 66, src: 'modem', adc: 284 }, ext: true, via: 'wifi', checkin: 300 }, MORNING - min(2));
+  const text = await morningSummary({ store, now: MORNING, notify: async () => {} });
+  assert.equal(text.body, 'Όλα καλά τη νύχτα · 0 αγγίγματα · φορτίζει · σε επαφή από Wi-Fi · αφοπλισμένος');
+});
+
 test('morning: what is wrong comes first, and the alarms of the night are counted', async () => {
   const { store, sent, report } = setup();
   await report({ reason: 'parked', fix: START, batt: { pct: 12 }, checkin: 900 }, MORNING - min(300));

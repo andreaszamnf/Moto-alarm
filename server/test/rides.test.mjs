@@ -71,6 +71,21 @@ test('riding: every point is kept and the app sees speed, distance and time as t
   assert.equal(position.lat, second[4][1], 'the bike on the map is where the newest point is');
 });
 
+test('points taken before the report that started the ride still belong to it, from its start', async () => {
+  const { store, report } = setup();
+  // The "motion" report got through 30 seconds after the bike moved off.
+  await report({ reason: 'motion', moving: true }, T0 + sec(30));
+  const pts = northPoints(T0, 20, 60);
+  await report({ reason: 'ride', moving: true, pts }, T0 + sec(60));
+  const end = pts[19];
+  await report({ reason: 'parked', fix: { lat: end[1], lon: end[2], spd: 0, t: end[0] } }, T0 + min(4));
+  const [trip] = await tripList(store);
+  assert.equal(trip.start, T0, 'the ride starts at its first point');
+  const route = await store.positions(trip.start, trip.end);
+  assert.equal(route[0].ts, T0, 'the whole route is found from the start');
+  assert.ok(route.length >= 20);
+});
+
 test('standing at a red light: the GPS wandering adds no distance', async () => {
   const { store, report } = setup();
   await report({ reason: 'motion', moving: true }, T0);

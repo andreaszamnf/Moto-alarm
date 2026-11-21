@@ -47,7 +47,9 @@ export async function morningText({ store, since, now = Date.now() }) {
     const m = rides.reduce((sum, t) => sum + t.m, 0);
     parts.push(`${plural(rides.length, 'διαδρομή', 'διαδρομές')} ${num1.format(m / 1000)} χλμ`);
   }
-  if (typeof pct === 'number' && pct > settings.lowBatteryPct) parts.push(`μπαταρία ${pct}%`);
+  // On USB the board cannot measure its battery, so just "charging" (firmware 1.7.0 on says so).
+  if (device?.ext === true) parts.push('φορτίζει');
+  else if (typeof pct === 'number' && pct > settings.lowBatteryPct) parts.push(`μπαταρία ${pct}%`);
   else if (device?.batt && pct == null) parts.push('στο ρεύμα');
   if (inTouch) parts.push(device.via === 'wifi' ? 'σε επαφή από Wi-Fi' : 'σε επαφή από 4G');
   parts.push(loan?.on ? 'δανεική' : armed?.armed ? 'οπλισμένος' : 'αφοπλισμένος');

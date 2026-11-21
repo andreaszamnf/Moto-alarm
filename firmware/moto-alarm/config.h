@@ -2,7 +2,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FIRMWARE_VERSION "1.8.0"
+#define FIRMWARE_VERSION "1.8.4"
 
 // Modem pins, as in LilyGO's utilities.h for LILYGO_SIM7600X.
 constexpr int MODEM_RX_PIN = 26;      // the ESP32 receives from the modem here

@@ -1,5 +1,5 @@
 // Service worker: keeps the app shell available offline and shows push notifications.
-const CACHE = 'moto-alarm-v21';
+const CACHE = 'moto-alarm-v25';
 const SHELL = [
   './',
   'index.html',

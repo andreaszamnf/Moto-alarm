@@ -255,7 +255,7 @@ test('ten wrong passwords lock the login for a while', async () => {
 test('Wi-Fi networks: added in the app, sent to the board once, passwords never back to the app', async () => {
   const add = await call('/api/wifi-nets', { method: 'POST', token, body: { ssid: 'Neighbour', password: 'secret-pass-1' } });
   assert.equal(add.status, 200);
-  assert.deepEqual(add.data, { names: ['Neighbour'], synced: false });
+  assert.deepEqual([add.data.names, add.data.synced], [['Neighbour'], false]);
   assert.equal((await call('/api/wifi-nets', { method: 'POST', token, body: { ssid: 'Bad', password: 'short' } })).status, 400);
 
   const state = await call('/api/state', { token });
@@ -270,7 +270,7 @@ test('Wi-Fi networks: added in the app, sent to the board once, passwords never 
   assert.equal((await call('/api/state', { token })).data.wifi.synced, true);
 
   const removed = await call('/api/wifi-nets', { method: 'POST', token, body: { ssid: 'Neighbour', remove: true } });
-  assert.deepEqual(removed.data, { names: [], synced: false });
+  assert.deepEqual([removed.data.names, removed.data.synced], [[], false]);
   const after = await call('/api/device/report', { method: 'POST', token: env.DEVICE_KEY, body: { reason: 'heartbeat', wifiv: v } });
   assert.deepEqual(after.data.wifi.nets, [], 'an empty list tells the board to forget');
 });

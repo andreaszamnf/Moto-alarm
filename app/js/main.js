@@ -1,7 +1,7 @@
 import { api, AuthError, getToken, setToken } from './api.js';
-import { crashEventText, initCrash, renderCrash } from './crash.js';
+import { crashEventText, initCrash, olderThan, renderCrash } from './crash.js';
 import { confirmArmWhileLent, extraEventText, initExtras, onSettingsPage, renderExtras } from './extras.js';
-import { renderRideCard, rideEventText, setupRides, setupSpeedo } from './ride.js';
+import { hideTripCard, minutesText, renderRideCard, rideEventText, setupRides, setupSpeedo, setupTripCard, showTripCard, tripDetails } from './ride.js';
 import { scriptableScript } from './scriptable.js';
 import { initService, loadService } from './service.js';
 
@@ -211,7 +211,8 @@ let marker;
 let accCircle; // around a rough position from Wi-Fi
 let parkCircle;
 let trailLine;
-let routeLine = null;
+let routeLine = null; // the 24-hour routes, or one past ride with its markers
+let scrubMarker = null; // where the finger is on the ride's speed line
 
 // OpenFreeMap: clean vector maps (streets and names only), free and without an API key.
 // Light by default; dark, or following the phone's theme, from the settings.
@@ -235,6 +236,7 @@ function setBaseLayer() {
   const pref = mapPref();
   const dark = pref === 'dark' || (pref === 'auto' && darkScheme.matches);
   baseLayer?.remove();
+  map.getContainer().classList.toggle('map-dark', dark); // a ride's outline follows the map
   baseLayer = L.maplibreGL({
     style: dark ? MAP_STYLES.dark : MAP_STYLES.light,
     attribution:
@@ -393,17 +395,17 @@ function render() {
   $('btn-arm').disabled = state.busy;
   $('btn-disarm').disabled = state.busy;
 
-  // On the bike's power (firmware 1.7.0 says so): the backup battery is kept full, so no forecast.
+  // On USB, a charger or the bike's power (firmware 1.7.0 says so): the board cannot measure its
+  // battery then, so just "charging", with no percentage or forecast.
   const onPower = device?.ext === true;
-  $('st-battery').textContent = onPower ? 'Στο ρεύμα' : batteryLabel(device?.batt);
-  const batterySub = onPower
-    ? device?.batt?.pct != null ? `εφεδρική ${device.batt.pct}%` : 'της μηχανής'
-    : snap.forecast ? `διαρκεί ${snap.forecast.text}` : '';
+  $('st-battery').textContent = onPower ? 'Φορτίζει' : batteryLabel(device?.batt);
+  const batterySub = !onPower && snap.forecast ? `διαρκεί ${snap.forecast.text}` : '';
   $('st-forecast').hidden = !batterySub;
   $('st-forecast').textContent = batterySub;
   $('share-label').textContent = snap.share ? 'Κοινοποιείται' : 'Κοινοποίηση';
   $('btn-share').setAttribute('aria-pressed', String(Boolean(snap.share)));
   $('st-seen').textContent = device?.lastSeen ? timeAgo(device.lastSeen) : '—';
+  $('st-eco').hidden = !snap.settings?.lowPower; // a reminder: alarms over 4G come a little later
   $('st-signal').textContent = signalText(device);
   $('st-net').textContent = networkText(device);
   $('st-net').hidden = !networkText(device);
@@ -472,6 +474,7 @@ function renderSettings(settings) {
   show('set-touch', Boolean(settings.touchAlerts), 'checked');
   show('set-radius', String(settings.parkRadius));
   show('set-offline', Boolean(settings.offlineAlert), 'checked');
+  show('set-lowpower', Boolean(settings.lowPower), 'checked');
   show('set-park', settings.parkAction ?? 'remind');
   show('set-schedule', Boolean(settings.schedule?.on), 'checked');
   show('set-arm-time', settings.schedule?.arm ?? '');
@@ -620,10 +623,18 @@ $('btn-locate').addEventListener('click', async () => {
   centerOnBike();
 });
 
+// Takes the routes off the map, and the card of a past ride with them.
+function clearRoute() {
+  routeLine?.remove();
+  routeLine = null;
+  scrubMarker?.remove();
+  scrubMarker = null;
+  hideTripCard();
+}
+
 $('btn-history').addEventListener('click', async () => {
   if (routeLine) {
-    routeLine.remove();
-    routeLine = null;
+    clearRoute();
     render();
     return;
   }
@@ -633,6 +644,7 @@ $('btn-history').addEventListener('click', async () => {
       toast('Δεν υπάρχουν διαδρομές το τελευταίο 24ωρο.');
       return;
     }
+    clearRoute();
     routeLine = L.polyline(positions.map((p) => [p.lat, p.lon]), { className: 'route-line', interactive: false }).addTo(map);
     state.following = false;
     map.fitBounds(routeLine.getBounds(), { padding: [28, 28] });
@@ -643,20 +655,61 @@ $('btn-history').addEventListener('click', async () => {
   }
 });
 
-// One past ride on the map (the history button clears it, like the 24-hour routes).
+// A marker of a past ride: start, end, top speed, a stop. Its label shows on a tap (the top speed's
+// always).
+function tripPin(point, kind, label, permanent = false) {
+  const pin = L.circleMarker([point.lat, point.lon], { radius: kind === 'trip-max' ? 7 : 6, className: `trip-pin ${kind}` });
+  pin.bindTooltip(label, { permanent, direction: 'top', offset: [0, -8], className: 'trip-label' });
+  if (!permanent) pin.on('click', () => pin.toggleTooltip());
+  return pin;
+}
+
+// The finger on the ride's speed line: a marker at that point of the route.
+function scrubTo(point) {
+  if (!point) {
+    scrubMarker?.remove();
+    scrubMarker = null;
+    return;
+  }
+  if (!scrubMarker) scrubMarker = L.circleMarker([point.lat, point.lon], { radius: 8, className: 'trip-pin trip-scrub', interactive: false }).addTo(map);
+  else scrubMarker.setLatLng([point.lat, point.lon]);
+  scrubMarker.bringToFront();
+  if (!map.getBounds().contains(scrubMarker.getLatLng())) map.panTo(scrubMarker.getLatLng());
+}
+
+// One past ride on the map, coloured by speed, with its markers and a card of details under the map
+// (the history button or the card's «Κλείσιμο» clears it, like the 24-hour routes).
 async function showTrip(trip) {
   try {
     const { positions } = await api(`history?from=${trip.start}&to=${trip.end}`);
-    if (positions.length < 2) {
+    const details = tripDetails(positions);
+    if (!details) {
       toast('Τα σημεία αυτής της διαδρομής δεν υπάρχουν πια (κρατιούνται 90 μέρες).');
       return;
     }
-    routeLine?.remove();
-    routeLine = L.polyline(positions.map((p) => [p.lat, p.lon]), { className: 'route-line', interactive: false }).addTo(map);
+    clearRoute();
+    const layer = L.featureGroup();
+    // An outline under the coloured line, so even the lightest blue stands out from the map.
+    L.polyline(details.points.map((p) => [p.lat, p.lon]), { className: 'trip-casing', interactive: false }).addTo(layer);
+    for (const s of details.segments) L.polyline(s.latlngs, { className: `trip-seg b${s.band}`, interactive: false }).addTo(layer);
+    const first = details.points[0];
+    const last = details.points[details.points.length - 1];
+    for (const s of details.stops) tripPin(s, 'trip-stop', `Στάση ${minutesText(s.s)}, ${clockFmt.format(new Date(s.from))}`).addTo(layer);
+    tripPin(first, 'trip-start', `Αρχή ${clockFmt.format(new Date(first.ts))}`).addTo(layer);
+    tripPin(last, 'trip-end', `Τέλος ${clockFmt.format(new Date(last.ts))}`).addTo(layer);
+    if (details.max) tripPin(details.max, 'trip-max', `${Math.round(details.max.kmh)} χλμ/ώ`, true).addTo(layer);
+    routeLine = layer.addTo(map);
     state.following = false;
-    map.fitBounds(routeLine.getBounds(), { padding: [28, 28] });
+    map.fitBounds(layer.getBounds(), { padding: [36, 36] });
     render();
-    $('map').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showTripCard(trip, details, {
+      onScrub: scrubTo,
+      onClose: () => {
+        clearRoute();
+        render();
+      },
+    });
+    $('map').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
     if (err instanceof AuthError) return logout('Η σύνδεση έληξε. Βάλε ξανά τον κωδικό.');
     toast(`Δεν φορτώθηκε η διαδρομή: ${errorText(err)}`);
@@ -672,6 +725,7 @@ setupRides({
   },
 });
 setupSpeedo();
+setupTripCard();
 
 $('btn-follow').addEventListener('click', () => {
   state.following = !state.following;
@@ -696,6 +750,7 @@ const PAGE_TITLES = {
   map: 'Χάρτης',
   wifiloc: 'Θέση χωρίς GPS',
   wifi: 'Wi-Fi της πλακέτας',
+  power: 'Κατανάλωση',
   loan: 'Δανεική / συνεργείο',
   folder: 'Φάκελος κλοπής',
   morning: 'Πρωινή σύνοψη',
@@ -717,6 +772,17 @@ function showSettingsPage(page = null) {
   onSettingsPage(page);
 }
 
+// Whether the board already keeps «Χαμηλή κατανάλωση» as set (it says so from firmware 1.8.2 on).
+function powerSyncText(lowPower, device) {
+  if (!device?.lastSeen) return '';
+  if (olderThan(device.fw, '1.8.2')) {
+    return lowPower
+      ? 'Οι αραιότεροι έλεγχοι ισχύουν από την επόμενη αναφορά. Το κλείσιμο του modem θέλει το πρόγραμμα 1.8.2, που η πλακέτα θα πάρει μόνη της.'
+      : '';
+  }
+  return Boolean(lowPower) !== Boolean(device.eco) ? 'Η πλακέτα θα το πάρει με την επόμενη αναφορά της.' : '';
+}
+
 // One line under each topic, so the list shows what is set without opening it.
 function renderSummaries() {
   const s = state.snap?.settings;
@@ -731,6 +797,10 @@ function renderSummaries() {
   $('sum-wifiloc').textContent = state.snap.wifiloc?.google ? 'Από Wi-Fi, με Google' : 'Από Wi-Fi, δωρεάν υπηρεσία';
   const nets = state.snap.wifi?.names ?? [];
   $('sum-wifi').textContent = nets.length ? nets.join(', ') : 'Μόνο όσα μπήκαν από τον υπολογιστή';
+  $('sum-power').textContent = s.lowPower ? 'Χαμηλή: «είμαι εδώ» κάθε μισή ώρα' : 'Κανονική, προσαρμόζεται μόνη της στο ρεύμα';
+  const powerNote = powerSyncText(s.lowPower, state.snap.device);
+  $('power-sync').hidden = !powerNote;
+  $('power-sync').textContent = powerNote;
   const fw = state.snap.firmware;
   $('fw-line').hidden = !fw?.running;
   $('fw-line').textContent = fw?.running
@@ -875,6 +945,7 @@ $('set-offline').addEventListener('change', (event) => saveSettings({ offlineAle
 $('set-radius').addEventListener('change', (event) => saveSettings({ parkRadius: Number(event.currentTarget.value) }));
 $('set-sensitivity').addEventListener('change', (event) => saveSettings({ sensitivity: Number(event.currentTarget.value) }));
 $('set-touch').addEventListener('change', (event) => saveSettings({ touchAlerts: event.currentTarget.checked }));
+$('set-lowpower').addEventListener('change', (event) => saveSettings({ lowPower: event.currentTarget.checked }));
 $('set-park').addEventListener('change', (event) => saveSettings({ parkAction: event.currentTarget.value }));
 for (const id of ['set-schedule', 'set-arm-time', 'set-disarm-time']) {
   $(id).addEventListener('change', () =>
@@ -1124,6 +1195,33 @@ function renderWifi() {
   list.hidden = !wifi.names.length;
   $('wifi-sync').hidden = wifi.synced;
   $('wifi-sync').textContent = 'Η πλακέτα θα πάρει τις αλλαγές με την επόμενη αναφορά της.';
+  const status = wifiStatusText(wifi);
+  $('wifi-status').hidden = !status;
+  $('wifi-status').textContent = status;
+}
+
+// How the board's last report went: over which Wi-Fi, or over 4G and why the Wi-Fi did not work
+// (the board says why from firmware 1.8.1 on).
+function wifiStatusText(wifi) {
+  if (!wifi.at || !wifi.via) return '';
+  const when = `Τελευταία αναφορά ${clockFmt.format(new Date(wifi.at))}`;
+  if (wifi.via === 'wifi') {
+    const signal = wifi.rssi != null ? `, σήμα ${wifiSignalLabel(wifi.rssi).toLowerCase()}` : '';
+    return `${when} από το Wi-Fi${wifi.name ? ` «${wifi.name}»` : ''}${signal}.`;
+  }
+  const f = wifi.fail;
+  if (!f) return wifi.names.length ? `${when} από 4G.` : '';
+  const net = f.n ? `«${f.n}»` : 'το δίκτυο';
+  const signal = f.s != null ? ` (σήμα ${wifiSignalLabel(f.s).toLowerCase()})` : '';
+  const around = f.seen === 0 ? 'δεν βλέπει κανένα Wi-Fi γύρω της' : f.seen === 1 ? 'γύρω βλέπει 1 άλλο δίκτυο' : f.seen ? `γύρω βλέπει ${f.seen} άλλα δίκτυα` : '';
+  const why = {
+    notfound: `δεν βρήκε κανένα από τα δίκτυά σου${around ? `· ${around}` : ''}. Αν το δίκτυο είναι εκεί, μάλλον είναι μόνο 5 GHz (η πλακέτα πιάνει μόνο 2,4 GHz) ή το όνομα δεν είναι γραμμένο ακριβώς ίδιο, με τα ίδια κεφαλαία.`,
+    password: `βρήκε το ${net}${signal} αλλά δεν δέχτηκε τον κωδικό. Γράψε ξανά το ίδιο όνομα με τον σωστό κωδικό και πάτα «Προσθήκη».`,
+    join: `βρήκε το ${net}${signal} αλλά δεν μπόρεσε να συνδεθεί, μάλλον γιατί το σήμα είναι αδύναμο εκεί που είναι η πλακέτα.`,
+    noip: `μπήκε στο ${net} αλλά ο ρούτερ δεν της έδωσε διεύθυνση.`,
+    noserver: `μπήκε στο ${net} αλλά δεν έφτασε στον server: το δίκτυο δεν έχει internet ή θέλει σελίδα εισόδου (καφέ, ξενοδοχείο), που η πλακέτα δεν μπορεί να περάσει.`,
+  }[f.k];
+  return why ? `${when} από 4G: ${why}` : `${when} από 4G.`;
 }
 
 async function saveWifi(body, doneText) {

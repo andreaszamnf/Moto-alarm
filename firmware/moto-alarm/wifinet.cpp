@@ -46,8 +46,49 @@ Network networks[MAX_NETWORKS];
 int networkCount = 0;
 bool loaded = false;
 
-RTC_DATA_ATTR char lastSsid[33] = "";  // the one that worked last time: tried first, without a scan
-bool tried = false;                    // once per wake
+// The network that worked last time: tried first, straight away without a scan. The driver then
+// looks for it more patiently than our quick scan, which often misses a weak network (the
+// neighbour's by the parking spot). Kept in flash too (1.8.3): a restart (an update, a brownout)
+// clears this memory, and the board then went over 4G until a scan happened to see the network.
+RTC_DATA_ATTR char lastSsid[33] = "";
+RTC_DATA_ATTR bool lastInFlash = false;  // lastSsid is also in flash
+bool tried = false;                      // once per wake
+WifiAttempt attempt;                   // what went wrong this wake, for the 4G report
+
+// Filled in by the Wi-Fi driver's events while joining (they come from another task).
+volatile uint8_t lastReason = 0;  // why the network turned it away
+volatile bool associated = false;  // joined the network (password accepted), maybe without an address yet
+bool watching = false;
+
+void watchEvents() {
+  if (watching) return;
+  watching = true;
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    lastReason = info.wifi_sta_disconnected.reason;
+    associated = false;
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { associated = true; }, ARDUINO_EVENT_WIFI_STA_CONNECTED);
+}
+
+// A wrong password ends the key exchange with one of these; anything else is mostly a weak signal
+// or a router that turned it away.
+WifiFail failOf(uint8_t reason, bool joined) {
+  if (joined) return WifiFail::NoAddress;  // in, but the router gave no address in time
+  switch (reason) {
+    case WIFI_REASON_MIC_FAILURE:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+      return WifiFail::Password;
+    default:
+      return WifiFail::Join;
+  }
+}
+
+struct JoinResult {
+  WifiFail fail;
+  uint8_t reason;
+};
 
 void add(const String& ssid, const String& password) {
   if (!ssid.length()) return;
@@ -74,23 +115,56 @@ void load() {
   }
 }
 
-bool join(int index, uint32_t timeoutMs, int32_t channel = 0, const uint8_t* bssid = nullptr) {
+// After a restart the copy in RTC memory is gone: the one in flash stands in.
+void loadLast() {
+  if (lastSsid[0]) return;
+  Preferences prefs;
+  if (!prefs.begin("wifilast", true)) return;  // nothing kept yet
+  prefs.getString("ssid", lastSsid, sizeof lastSsid);
+  prefs.end();
+  lastInFlash = lastSsid[0] != '\0';
+}
+
+// Flash is written only when the network changes, not at every report.
+void rememberLast(const String& ssid) {
+  if (lastInFlash && ssid == lastSsid) return;
+  strlcpy(lastSsid, ssid.c_str(), sizeof lastSsid);
+  Preferences prefs;
+  if (!prefs.begin("wifilast", false)) return;
+  prefs.putString("ssid", lastSsid);
+  prefs.end();
+  lastInFlash = true;
+}
+
+JoinResult join(int index, uint32_t timeoutMs, int32_t channel = 0, const uint8_t* bssid = nullptr) {
+  watchEvents();
+  lastReason = 0;
+  associated = false;
   WiFi.begin(networks[index].ssid.c_str(), networks[index].password.c_str(), channel, bssid);
   const uint32_t start = millis();
   while (!wifiConnected() && millis() - start < timeoutMs) pause(50);
   if (!wifiConnected()) {
+    // Read before disconnecting: that brings an event of its own.
+    const JoinResult result{failOf(lastReason, associated), lastReason};
     WiFi.disconnect(false, true);
-    return false;
+    Serial.printf("wifi: network %d of %d failed, %s (reason %u)\n", index + 1, networkCount,
+                  wifiFailName(result.fail), static_cast<unsigned>(result.reason));
+    return result;
   }
-  strlcpy(lastSsid, networks[index].ssid.c_str(), sizeof lastSsid);
+  rememberLast(networks[index].ssid);
   Serial.printf("wifi: network %d of %d connected after %u ms, %d dBm\n", index + 1, networkCount,
                 static_cast<unsigned>(millis() - start), static_cast<int>(WiFi.RSSI()));
-  return true;
+  return {WifiFail::None, 0};
 }
 
-// Looks around once (about 1.5 s) and joins the strongest known network in reach.
+// Looks around once and joins the strongest known network in reach. When none works, `attempt` says
+// why, about the strongest known one (it says the most). It listens on each channel for 300 ms
+// (about 4 s in all), long enough to hear a network's beacon two or three times: the quick scan of
+// up to 1.8.3 (100 ms, asking instead of listening) kept missing the neighbour's weak Wi-Fi at the
+// parking spot, and the board went over 4G there (2026-11-21).
 bool scanAndJoin() {
-  const int16_t found = WiFi.scanNetworks(false, false, false, 100);
+  const int16_t found = WiFi.scanNetworks(false, false, true, 300);
+  attempt.seen = found > 0 ? found : 0;
   int best[MAX_NETWORKS];  // scan entry of each known network, -1 when it is not in reach
   for (int n = 0; n < networkCount; n++) best[n] = -1;
   for (int16_t i = 0; i < found; i++) {
@@ -100,6 +174,7 @@ bool scanAndJoin() {
     }
   }
   bool joined = false;
+  bool triedOne = false;
   while (!joined) {
     int pick = -1;  // the strongest one not tried yet
     for (int n = 0; n < networkCount; n++) {
@@ -110,8 +185,18 @@ bool scanAndJoin() {
     best[pick] = -1;
     uint8_t bssid[6];
     memcpy(bssid, WiFi.BSSID(entry), 6);
-    joined = join(pick, WIFI_CONNECT_MS, WiFi.channel(entry), bssid);
+    const int8_t rssi = static_cast<int8_t>(WiFi.RSSI(entry));
+    const JoinResult result = join(pick, WIFI_CONNECT_MS, WiFi.channel(entry), bssid);
+    joined = result.fail == WifiFail::None;
+    if (!joined && !triedOne) {
+      attempt.fail = result.fail;
+      attempt.ssid = networks[pick].ssid;
+      attempt.rssi = rssi;
+      attempt.code = result.reason;
+    }
+    triedOne = true;
   }
+  if (!triedOne) attempt.fail = WifiFail::NotFound;
   WiFi.scanDelete();
   return joined;
 }
@@ -130,19 +215,47 @@ bool wifiConnect() {
   if (wifiConnected()) return true;
   if (tried) return false;
   tried = true;
+  attempt = WifiAttempt();
   WiFi.persistent(false);  // the networks live in the program and in our own flash keys
   WiFi.mode(WIFI_STA);
   // Usually the bike stands where it stood last time: that network straight away.
+  loadLast();
   for (int n = 0; n < networkCount; n++) {
     if (networks[n].ssid == lastSsid) {
-      if (join(n, WIFI_QUICK_CONNECT_MS)) return true;
+      if (join(n, WIFI_QUICK_CONNECT_MS).fail == WifiFail::None) return true;
       break;
     }
   }
-  if (scanAndJoin()) return true;
-  Serial.println("wifi: no known network here, using 4G");
+  if (scanAndJoin()) {
+    attempt = WifiAttempt();
+    return true;
+  }
+  Serial.printf("wifi: %s, using 4G\n", wifiFailName(attempt.fail));
   wifiOff();
   return false;
+}
+
+const WifiAttempt& wifiLastAttempt() { return attempt; }
+
+const char* wifiFailName(WifiFail fail) {
+  switch (fail) {
+    case WifiFail::NotFound: return "notfound";
+    case WifiFail::Password: return "password";
+    case WifiFail::Join: return "join";
+    case WifiFail::NoAddress: return "noip";
+    case WifiFail::NoServer: return "noserver";
+    default: return "none";
+  }
+}
+
+void wifiNoServer(int code) {
+  attempt.fail = WifiFail::NoServer;
+  attempt.ssid = WiFi.SSID();
+  attempt.rssi = static_cast<int8_t>(WiFi.RSSI());
+  attempt.code = static_cast<int16_t>(code);
+  attempt.seen = -1;
+  Serial.printf("wifi: joined but the server did not answer (%d), using 4G\n", code);
+  wifiOff();  // tried stays set: the rest of this wake goes straight to 4G
 }
 
 String wifiName() { return wifiConnected() ? WiFi.SSID() : String(); }
@@ -199,7 +312,11 @@ int wifiPost(const char* url, const char* bearer, const String& json, String& re
   if (status > 0) response = http.getString();
   http.end();
   Serial.printf("wifi: post took %u ms\n", static_cast<unsigned>(millis() - start));
-  return status > 0 ? status : -1;
+  if (status <= 0) {
+    wifiNoServer(status);  // joined, but no way out to the server (no internet)
+    return -1;
+  }
+  return status;
 }
 
 int wifiGet(const String& url, const char* bearer, uint8_t* out, size_t max) {
