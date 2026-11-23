@@ -264,6 +264,11 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
     if (wa.rssi) w["s"] = wa.rssi;
     if (wa.code) w["c"] = wa.code;
     if (wa.seen >= 0) w["seen"] = wa.seen;
+    // The networks of the last two times, tried by name first (1.8.7): what each answered.
+    if (wa.keptReason[0] >= 0 || wa.keptReason[1] >= 0) {
+      JsonArray kr = w["kr"].to<JsonArray>();
+      for (int16_t reason : wa.keptReason) kr.add(reason);
+    }
   }
   if (st.checkInS) doc["checkin"] = st.checkInS;  // the server expects to hear from it this often
   if (st.lowPower) doc["eco"] = true;             // it keeps «Χαμηλή κατανάλωση»

@@ -7,8 +7,8 @@
 #include <ArduinoJson.h>
 
 bool wifiConfigured();
-// Joins a known network: the one that worked last time first, else the strongest known one a
-// scan finds. Tries once per wake: where none is in reach, the next try goes straight to 4G.
+// Joins a known network: the ones that worked the last two times first, by name, else the strongest
+// known one a scan finds. Tries once per wake: where none is in reach, the next try goes straight to 4G.
 bool wifiConnect();
 bool wifiConnected();
 // POSTs JSON over HTTPS. Returns the HTTP status, or -1 when it did not get through.
@@ -24,6 +24,9 @@ struct WifiAttempt {
   int8_t rssi = 0;    // that network's signal in the scan, dBm
   int16_t code = 0;   // the Wi-Fi disconnect reason, or the HTTP status or error for NoServer
   int16_t seen = -1;  // networks the scan found in all, -1 when it did not scan
+  // The networks kept from earlier wakes, tried by name before the scan (1.8.7): the driver's reason
+  // for each that did not join (201 = not found, 0 = no answer in time), -1 when not tried.
+  int16_t keptReason[2] = {-1, -1};
 };
 const WifiAttempt& wifiLastAttempt();
 const char* wifiFailName(WifiFail fail);  // as the report says it: "notfound", "password", ...

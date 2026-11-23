@@ -78,7 +78,13 @@ function batteryLabel(batt) {
   return '—';
 }
 
-function signalLabel(rssi) {
+const capitalize = (word) => word.charAt(0).toUpperCase() + word.slice(1);
+
+// 4G: the server's verdict on the modem's reading at the last report (the cell's own power, pulled
+// down by noise), else the plain strength. The plain strength alone said «Καλό» at the parking spot
+// while the cell was weak and noisy (2026-11-23).
+function signalLabel(rssi, last) {
+  if (last?.quality?.word) return capitalize(last.quality.word);
   if (rssi == null) return '—';
   if (rssi >= -85) return 'Καλό';
   if (rssi >= -100) return 'Μέτριο';
@@ -94,9 +100,9 @@ function wifiSignalLabel(rssi) {
 }
 
 // How the board got through the last time: how well it heard the network, and which one.
-function signalText(device) {
-  if (!device?.lastSeen || !device.via) return signalLabel(device?.rssi);
-  return device.via === 'wifi' ? wifiSignalLabel(device.wifiRssi) : signalLabel(device.rssi);
+function signalText(device, last) {
+  if (!device?.lastSeen || !device.via) return signalLabel(device?.rssi, last);
+  return device.via === 'wifi' ? wifiSignalLabel(device.wifiRssi) : signalLabel(device.rssi, last);
 }
 
 // Empty for reports from before the server kept the network (device.via missing).
@@ -384,10 +390,13 @@ function render() {
   }
 
   $('arm-state').textContent = armed.armed ? 'Οπλισμένος' : 'Αφοπλισμένος';
+  // An old position stands in for the parking spot until the board sends a fresh one (parkStale).
   $('arm-sub').textContent = armed.armed
-    ? armed.park
+    ? armed.park && !armed.parkStale
       ? `Σε ειδοποιεί αν κουνηθεί ή απομακρυνθεί πάνω από ${settings.parkRadius} μ.`
-      : 'Σε ειδοποιεί αν κουνηθεί. Το σημείο στάθμευσης ορίζεται με την επόμενη θέση της συσκευής.'
+      : armed.park
+        ? 'Σε ειδοποιεί αν κουνηθεί. Το σημείο στάθμευσης επιβεβαιώνεται με την επόμενη θέση της συσκευής.'
+        : 'Σε ειδοποιεί αν κουνηθεί. Το σημείο στάθμευσης ορίζεται με την επόμενη θέση της συσκευής.'
     : snap.armOnPark
       ? 'Θα οπλίσει μόλις παρκάρεις (πρόγραμμα).'
       : 'Όπλισέ τον όταν αφήνεις τη μηχανή.';
@@ -406,7 +415,7 @@ function render() {
   $('btn-share').setAttribute('aria-pressed', String(Boolean(snap.share)));
   $('st-seen').textContent = device?.lastSeen ? timeAgo(device.lastSeen) : '—';
   $('st-eco').hidden = !snap.settings?.lowPower; // a reminder: alarms over 4G come a little later
-  $('st-signal').textContent = signalText(device);
+  $('st-signal').textContent = signalText(device, snap.signal?.last);
   $('st-net').textContent = networkText(device);
   $('st-net').hidden = !networkText(device);
   renderRideCard(snap.ride, serverNow());
@@ -817,15 +826,17 @@ function renderSummaries() {
 // ---------- signal test ----------
 const TECH_LABEL = { LTE: '4G', '3G': '3G', GSM: '2G' };
 
-// LTE signal power (RSRP) if the device sent it, otherwise the plain signal strength.
+// LTE signal power (RSRP) if the device sent it, otherwise the plain signal strength. The word is the
+// server's (`quality`: the power, pulled down when the network is noisy); the rest is a fallback.
 function signalQuality(entry) {
   if (typeof entry.rsrp === 'number') {
     const v = entry.rsrp; // dBm: the server turns the modem's tenths into dBm
-    return { word: v >= -90 ? 'καλό' : v >= -105 ? 'μέτριο' : v >= -115 ? 'αδύναμο' : 'πολύ αδύναμο', dbm: Math.round(v) };
+    const word = entry.quality?.word ?? (v >= -90 ? 'καλό' : v >= -105 ? 'μέτριο' : v >= -115 ? 'αδύναμο' : 'πολύ αδύναμο');
+    return { word, dbm: Math.round(v), noisy: entry.quality?.noisy === true };
   }
   if (typeof entry.rssi === 'number') {
     const v = entry.rssi;
-    return { word: v >= -85 ? 'καλό' : v >= -100 ? 'μέτριο' : 'αδύναμο', dbm: v };
+    return { word: v >= -85 ? 'καλό' : v >= -100 ? 'μέτριο' : 'αδύναμο', dbm: v, noisy: false };
   }
   return null;
 }
@@ -835,6 +846,7 @@ function signalLine(entry) {
   const quality = signalQuality(entry);
   const parts = [network];
   if (quality) parts.push(`${quality.word} (${quality.dbm} dBm)`);
+  if (quality?.noisy) parts.push('πολύς θόρυβος');
   if (entry.reg > 30) parts.push(`βρήκε δίκτυο σε ${entry.reg}″`);
   if (entry.fails) parts.push(`${entry.fails} αποτυχίες πριν`);
   return parts.join(' · ');

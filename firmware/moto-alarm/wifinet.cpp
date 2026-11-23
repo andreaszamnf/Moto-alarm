@@ -46,12 +46,17 @@ Network networks[MAX_NETWORKS];
 int networkCount = 0;
 bool loaded = false;
 
-// The network that worked last time: tried first, straight away without a scan. The driver then
-// looks for it more patiently than our quick scan, which often misses a weak network (the
-// neighbour's by the parking spot). Kept in flash too (1.8.3): a restart (an update, a brownout)
-// clears this memory, and the board then went over 4G until a scan happened to see the network.
+// The network that worked last time, and the one before it (a different one, 1.8.7): tried first, by
+// name, straight away without a scan. The driver then looks for each more patiently than our scan,
+// which sometimes misses the neighbour's Wi-Fi by the parking spot even where it is good: on
+// 2026-11-23 at 21:19 the scan heard 11 networks without it, and at 21:34 the board joined it at
+// -69 dBm. Two, because the bike stands at two places in turn: arriving at the spot from home, the
+// last network is home's and the one before is the neighbour's, and the other way round at home.
+// Kept in flash too (1.8.3): a restart (an update, a brownout) clears this memory, and the board
+// then went over 4G until a scan happened to see the network.
 RTC_DATA_ATTR char lastSsid[33] = "";
-RTC_DATA_ATTR bool lastInFlash = false;  // lastSsid is also in flash
+RTC_DATA_ATTR char prevSsid[33] = "";     // the one that worked before lastSsid
+RTC_DATA_ATTR bool lastInFlash = false;  // lastSsid and prevSsid are also in flash
 bool tried = false;                      // once per wake
 WifiAttempt attempt;                   // what went wrong this wake, for the 4G report
 
@@ -121,17 +126,21 @@ void loadLast() {
   Preferences prefs;
   if (!prefs.begin("wifilast", true)) return;  // nothing kept yet
   prefs.getString("ssid", lastSsid, sizeof lastSsid);
+  if (prefs.isKey("prev")) prefs.getString("prev", prevSsid, sizeof prevSsid);  // kept since 1.8.7
   prefs.end();
   lastInFlash = lastSsid[0] != '\0';
 }
 
-// Flash is written only when the network changes, not at every report.
+// Flash is written only when the network changes, not at every report. The one it replaces becomes
+// the one before.
 void rememberLast(const String& ssid) {
   if (lastInFlash && ssid == lastSsid) return;
+  if (lastSsid[0] && ssid != lastSsid) strlcpy(prevSsid, lastSsid, sizeof prevSsid);
   strlcpy(lastSsid, ssid.c_str(), sizeof lastSsid);
   Preferences prefs;
   if (!prefs.begin("wifilast", false)) return;
   prefs.putString("ssid", lastSsid);
+  prefs.putString("prev", prevSsid);
   prefs.end();
   lastInFlash = true;
 }
@@ -160,8 +169,9 @@ JoinResult join(int index, uint32_t timeoutMs, int32_t channel = 0, const uint8_
 // Looks around once and joins the strongest known network in reach. When none works, `attempt` says
 // why, about the strongest known one (it says the most). It listens on each channel for 300 ms
 // (about 4 s in all), long enough to hear a network's beacon two or three times: the quick scan of
-// up to 1.8.3 (100 ms, asking instead of listening) kept missing the neighbour's weak Wi-Fi at the
-// parking spot, and the board went over 4G there (2026-11-21).
+// up to 1.8.3 (100 ms, asking instead of listening) kept missing the neighbour's Wi-Fi at the
+// parking spot, and the board went over 4G there (2026-11-21). This one missed it once too (see
+// lastSsid), so the networks kept from earlier wakes are tried by name before it.
 bool scanAndJoin() {
   const int16_t found = WiFi.scanNetworks(false, false, true, 300);
   attempt.seen = found > 0 ? found : 0;
@@ -201,6 +211,23 @@ bool scanAndJoin() {
   return joined;
 }
 
+// One of the networks kept from earlier wakes, by name (slot 0 the last one, 1 the one before).
+// When it does not join, the 4G report says what the driver answered (`kr`), which tells a network
+// that was not there at all (201) from one that was. False also when the network is not known any
+// more (taken out in the app).
+bool joinKept(const char* ssid, int slot) {
+  if (!ssid[0]) return false;
+  for (int n = 0; n < networkCount; n++) {
+    if (networks[n].ssid == ssid) {
+      const JoinResult result = join(n, WIFI_QUICK_CONNECT_MS);
+      if (result.fail == WifiFail::None) return true;
+      attempt.keptReason[slot] = result.reason;
+      return false;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 bool wifiConfigured() {
@@ -218,14 +245,12 @@ bool wifiConnect() {
   attempt = WifiAttempt();
   WiFi.persistent(false);  // the networks live in the program and in our own flash keys
   WiFi.mode(WIFI_STA);
-  // Usually the bike stands where it stood last time: that network straight away.
+  // Usually the bike stands where it stood last time, or where it stood the time before (home and the
+  // parking spot in turn): those networks straight away. Where neither is in reach this costs about
+  // 4 s more before 4G than up to 1.8.6.
   loadLast();
-  for (int n = 0; n < networkCount; n++) {
-    if (networks[n].ssid == lastSsid) {
-      if (join(n, WIFI_QUICK_CONNECT_MS).fail == WifiFail::None) return true;
-      break;
-    }
-  }
+  if (joinKept(lastSsid, 0)) return true;
+  if (strcmp(prevSsid, lastSsid) && joinKept(prevSsid, 1)) return true;
   if (scanAndJoin()) {
     attempt = WifiAttempt();
     return true;

@@ -6,6 +6,8 @@ server/.wrangler/
 firmware/moto-alarm/secrets.h
 firmware/moto-alarm/wifi.h
 firmware/build/
+cad/lilygo/
+cad/out/
 .claude/settings.local.json
 .claude/active-sessions.json
 

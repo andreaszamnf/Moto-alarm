@@ -13,6 +13,7 @@ import {
   runAutomation,
   setArmed,
   sharedView,
+  signalQuality,
   signalView,
   snapshot,
   startShare,
@@ -129,8 +130,45 @@ test('armed without a known position: the first quiet fix becomes the parking sp
   const { store, report } = setup();
   await setArmed({ store, armed: true, now: T0 });
   assert.equal((await snapshot(store)).armed.park, null);
+  assert.deepEqual((await snapshot(store)).pending, { locate: T0 }, 'the board is asked where it is');
   await report({ reason: 'heartbeat', fix: PARK }, T0 + min(5));
   assert.deepEqual((await snapshot(store)).armed.park, PARK);
+});
+
+test('arming with an old fix: it only stands in, and the fresh position replaces it (2026-11-23)', async () => {
+  const { store, report } = setup();
+  const spot = { lat: PARK.lat + 0.0008, lon: PARK.lon }; // about 89 m on: moved without a report
+  await report({ reason: 'boot', fix: PARK }, T0);
+  await setArmed({ store, armed: true, now: T0 + min(9) });
+  let snap = await snapshot(store, T0 + min(9));
+  assert.deepEqual([snap.armed.park, snap.armed.parkStale], [PARK, true]);
+  const checkin = await report({ reason: 'checkin' }, T0 + min(16));
+  assert.equal(checkin.locate, true, 'the board is asked where it is');
+  const located = await report({ reason: 'locate', fix: { ...spot, acc: 3 } }, T0 + min(17));
+  assert.equal(located.locate, false);
+  snap = await snapshot(store, T0 + min(17));
+  assert.equal(snap.alarm.active, false, 'no "moved" against the old fix');
+  assert.deepEqual([snap.armed.park, snap.armed.parkStale], [spot, undefined]);
+});
+
+test('arming right after parking takes that fix as it is, without asking the board', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'parked', fix: PARK }, T0);
+  await setArmed({ store, armed: true, now: T0 + min(4) });
+  const snap = await snapshot(store, T0 + min(4));
+  assert.deepEqual([snap.armed.park, snap.armed.parkStale, snap.pending], [PARK, undefined, {}]);
+  assert.equal((await report({ reason: 'checkin' }, T0 + min(10))).locate, false);
+});
+
+test('with an old fix standing in, a moving bike far from it is "moved", a still one is not', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'parked', fix: PARK }, T0);
+  await setArmed({ store, armed: true, now: T0 + min(30) });
+  await report({ reason: 'motion' }, T0 + min(31));
+  await report({ reason: 'track', moving: false, fix: { lat: PARK.lat + 0.0008, lon: PARK.lon, acc: 3 } }, T0 + min(32));
+  assert.equal((await snapshot(store, T0 + min(32))).alarm.reason, 'motion', 'a still bike: not "moved"');
+  await report({ reason: 'track', moving: true, fix: { lat: PARK.lat + 0.005, lon: PARK.lon, acc: 5 } }, T0 + min(33));
+  assert.equal((await snapshot(store, T0 + min(33))).alarm.reason, 'moved');
 });
 
 test('"where is it now" stays pending until a newer fix arrives', async () => {
@@ -519,6 +557,35 @@ test('Wi-Fi: a 4G report says why the Wi-Fi did not work, a report over Wi-Fi cl
   await report({ reason: 'checkin', via: 'wifi', wnet: 'Kafe', wrssi: -60, wfail: { k: 'password' } }, T0 + min(10));
   wifi = (await snapshot(store, T0 + min(11))).wifi;
   assert.deepEqual([wifi.via, wifi.name, wifi.rssi, wifi.fail], ['wifi', 'Kafe', -60, null]);
+});
+
+test('Wi-Fi: the 4G report keeps what the networks of the last two times answered (firmware 1.8.7)', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'checkin', wfail: { k: 'notfound', seen: 11, kr: [201, 0, 7] } }, T0);
+  const fail = (await snapshot(store, T0 + min(1))).wifi.fail;
+  assert.deepEqual(fail, { k: 'notfound', n: null, s: null, c: null, seen: 11, kr: [201, 0] });
+});
+
+test('4G signal: the cell power decides, a noisy network pulls it down, the plain strength stands in', () => {
+  // The parking spot on 2026-11-23 at 21:19, where the plain strength alone said «καλό».
+  assert.deepEqual(signalQuality({ rssi: -55, rsrp: -92.2, rsrq: -20, snr: 5 }), { word: 'αδύναμο', bars: 1, noisy: true });
+  assert.deepEqual(signalQuality({ rssi: -51, rsrp: -70.1, rsrq: -14.1, snr: 9 }), { word: 'καλό', bars: 4, noisy: false });
+  assert.deepEqual(signalQuality({ rsrp: -82, rsrq: -18.2 }), { word: 'μέτριο', bars: 2, noisy: true });
+  assert.deepEqual(signalQuality({ rsrp: -99.4, rsrq: -14.9, snr: 9 }), { word: 'μέτριο', bars: 2, noisy: false });
+  assert.deepEqual(signalQuality({ rsrp: -86, rsrq: -11, snr: -3 }), { word: 'αδύναμο', bars: 1, noisy: true });
+  assert.deepEqual(signalQuality({ rsrp: -118 }), { word: 'πολύ αδύναμο', bars: 0, noisy: false });
+  assert.deepEqual(signalQuality({ rssi: -88 }), { word: 'μέτριο', bars: 2, noisy: false });
+  assert.equal(signalQuality({}), null);
+  assert.equal(signalQuality(null), null);
+});
+
+test('widget status judges 4G by the modem reading of the last report', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'checkin', rssi: -55, net: { op: 'vodafone GR iotsim.gr', tech: 'LTE', rsrp: -922, rsrq: -200, snr: 5 } }, T0);
+  const snap = await snapshot(store, T0 + min(1));
+  assert.deepEqual(snap.signal.last.quality, { word: 'αδύναμο', bars: 1, noisy: true });
+  const status = quickStatus(snap);
+  assert.deepEqual([status.signal, status.bars, status.rssi], ['αδύναμο', 1, -55]);
 });
 
 test('armed: movement that begins after "seen" sounds the alarm again, ongoing movement does not', async () => {

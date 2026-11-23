@@ -47,6 +47,8 @@ const MAX_SMS = 3; // per alarm: the SIM has 50 SMS a year
 // it stamps up to this much before "seen" may in fact have begun after it.
 const CLOCK_SLACK_MS = 2_000;
 const RIDING_RECENT_MS = 20 * 60_000;
+// Arming takes the last GPS fix as the parking spot when it is at most this old (see setArmed).
+const PARK_FIX_FRESH_MS = 5 * 60_000;
 const WIFI_REUSE_MS = 6 * 3_600_000; // same Wi-Fi around the bike within this time: same answer, no new lookup
 const SCHEDULE_IDLE_WRITE_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
@@ -103,6 +105,9 @@ function normalizeWifiFail(w) {
     s: finite(w.s), // its signal, dBm
     c: finite(w.c), // the Wi-Fi reason or HTTP status, for diagnosis
     seen: finite(w.seen), // networks around in all
+    // Firmware 1.8.7 on: what the networks of the last two times answered when tried by name before
+    // the scan (201 = not there at all, 0 = no answer in time, -1 = not tried), for diagnosis.
+    ...(Array.isArray(w.kr) ? { kr: w.kr.slice(0, 2).map(finite).filter((r) => r !== null) } : {}),
   };
 }
 
@@ -247,16 +252,31 @@ export function batteryForecast(log, now = Date.now()) {
 
 // ---------- signal ----------
 
-export function signalText(rssi) {
-  if (typeof rssi !== 'number') return null;
-  if (rssi >= -85) return 'καλό';
-  if (rssi >= -100) return 'μέτριο';
-  return 'αδύναμο';
-}
+const SIGNAL_WORDS = ['πολύ αδύναμο', 'αδύναμο', 'μέτριο', 'καλό', 'καλό'];
 
-export function signalBars(rssi) {
-  if (typeof rssi !== 'number') return 0;
-  return rssi >= -75 ? 4 : rssi >= -85 ? 3 : rssi >= -95 ? 2 : rssi >= -105 ? 1 : 0;
+// How well the board heard the 4G network, as a word and 0-4 bars, for the app, the widget and the
+// signal test. The plain strength (RSSI) counts all the power on the channel, noise and the other
+// cells included: at the parking spot on 2026-11-23 it said -55 dBm («καλό») while the cell itself
+// came in at -92 dBm with the worst clarity the modem reports (RSRQ -20 dB, 14 s to find the
+// network). So the cell's own power (RSRP) decides, and poor clarity or more noise than signal
+// (SNR below 0) pulls it down: `noisy` says so. Without RSRP (older firmware, no reading from the
+// modem) the plain strength stands in, as before.
+export function signalQuality(entry) {
+  const { rssi = null, rsrp = null, rsrq = null, snr = null } = entry && typeof entry === 'object' ? entry : {};
+  if (typeof rsrp === 'number') {
+    const power = rsrp >= -80 ? 4 : rsrp >= -90 ? 3 : rsrp >= -105 ? 2 : rsrp >= -115 ? 1 : 0;
+    let cap = 4;
+    if (typeof rsrq === 'number') cap = rsrq <= -19.5 ? 1 : rsrq < -15 ? 2 : 4;
+    if (typeof snr === 'number' && snr < 0) cap = Math.min(cap, 1);
+    const bars = Math.min(power, cap);
+    return { word: SIGNAL_WORDS[bars], bars, noisy: bars < power };
+  }
+  if (typeof rssi === 'number') {
+    const word = rssi >= -85 ? 'καλό' : rssi >= -100 ? 'μέτριο' : 'αδύναμο';
+    const bars = rssi >= -75 ? 4 : rssi >= -85 ? 3 : rssi >= -95 ? 2 : rssi >= -105 ? 1 : 0;
+    return { word, bars, noisy: false };
+  }
+  return null;
 }
 
 // ---------- device reports ----------
@@ -426,9 +446,13 @@ export async function handleReport({
 
   let sms = null;
   if (armed.armed) {
-    // Armed before the first fix arrived: the first quiet GPS fix becomes the parking spot.
-    if (!armed.park && fix && fix.src !== 'wifi' && !alarm.active && reason !== 'motion') {
+    // Armed before the first fix arrived, or with an old one standing in (`parkStale`, see setArmed):
+    // the first quiet GPS fix becomes the parking spot. It is not measured against the old one, which
+    // may be from before the bike was moved; movement (a motion report, a moving bike) still is.
+    const quiet = fix && fix.src !== 'wifi' && !alarm.active && reason !== 'motion' && report?.moving !== true;
+    if (quiet && (!armed.park || armed.parkStale)) {
       armed.park = { lat: fix.lat, lon: fix.lon };
+      delete armed.parkStale;
       await store.set('armed', armed);
     }
     if (reason === 'touch' && !alarm.active) await onTouch({ store, settings, now, notify });
@@ -446,8 +470,10 @@ export async function handleReport({
     if (reason === 'motion' || (report?.moving === true && !movedBeforeArming)) trigger = 'motion';
     if (reason === 'tamper') trigger = 'tamper';
     if (powerLost) trigger = 'power';
-    // Only GPS decides "moved": a position from Wi-Fi can be off by a street or more.
-    if (fix && fix.src !== 'wifi' && armed.park) {
+    // Only GPS decides "moved": a position from Wi-Fi can be off by a street or more. Against an old
+    // fix standing in, only while the bike is on the move: a still bike may simply not be where that
+    // old fix was taken.
+    if (fix && fix.src !== 'wifi' && armed.park && (!armed.parkStale || report?.moving === true)) {
       metres = distanceM(armed.park, fix);
       // A fix with poor accuracy needs to be further out before we believe the bike really moved.
       if (metres > settings.parkRadius + (fix.acc ?? 0)) trigger = 'moved';
@@ -610,8 +636,16 @@ export async function setArmed({ store, armed, now = Date.now(), by = null, canc
   if (armed) {
     const fix = await store.get('last_fix');
     // A rough Wi-Fi position is no parking spot: the next GPS fix sets it instead.
-    const park = fix && fix.src !== 'wifi' ? { lat: fix.lat, lon: fix.lon } : null;
-    await store.set('armed', { armed: true, since: now, park });
+    const gps = fix && fix.src !== 'wifi' ? fix : null;
+    const park = gps ? { lat: gps.lat, lon: gps.lon } : null;
+    // A fix from the last few minutes is where the bike stands ("parked" comes with one). An older one
+    // may be from before the bike was moved without the board reporting: on 2026-11-23 the board was
+    // switched on at one place (fix 21:03), the bike went about 42 m on, and arming at 21:12 took the
+    // old fix, close to a false "moved". Such a fix only stands in (`parkStale`): the board is asked
+    // for its position at its next report, and that quiet fix becomes the parking spot (handleReport).
+    const fresh = Boolean(gps) && now - gps.ts <= PARK_FIX_FRESH_MS;
+    await store.set('armed', { armed: true, since: now, park, ...(park && !fresh ? { parkStale: true } : {}) });
+    if (!fresh) await requestLocate({ store, now });
     await endRide(store, now); // armed: the ride is over, even before the board says "parked"
     await endLoan(store, now); // and the bike is back from the workshop or the friend
   } else {
@@ -838,7 +872,8 @@ function fromTenths(value, floor) {
 
 export function signalInDb(entry) {
   if (!entry || typeof entry !== 'object') return entry ?? null;
-  return { ...entry, rsrp: fromTenths(entry.rsrp, RSRP_FLOOR_DBM), rsrq: fromTenths(entry.rsrq, RSRQ_FLOOR_DB) };
+  const inDb = { ...entry, rsrp: fromTenths(entry.rsrp, RSRP_FLOOR_DBM), rsrq: fromTenths(entry.rsrq, RSRQ_FLOOR_DB) };
+  return { ...inDb, quality: signalQuality(inDb) };
 }
 
 // One measurement from a device report: which network, how strong, and how hard it was to get through.
@@ -911,6 +946,8 @@ export function quickStatus(snap) {
   const lastSeen = snap.device?.lastSeen ?? null;
   const lastSeenText = lastSeen ? `επαφή ${timeAgoText(lastSeen, snap.now)}` : 'καμία επαφή ακόμα';
   const rssi = snap.device?.rssi ?? null;
+  // The modem's reading at the last report (signal.last), else the plain strength the device kept.
+  const quality = signalQuality(snap.signal?.last) ?? signalQuality({ rssi });
   const state = alarm ? 'ΣΥΝΑΓΕΡΜΟΣ' : armed ? 'Οπλισμένος' : 'Αφοπλισμένος';
   const parts = [state];
   if (charging) parts.push('φορτίζει');
@@ -924,8 +961,8 @@ export function quickStatus(snap) {
     charging,
     forecast: charging ? null : snap.forecast?.text ?? null,
     rssi,
-    signal: signalText(rssi),
-    bars: signalBars(rssi),
+    signal: quality?.word ?? null,
+    bars: quality?.bars ?? 0,
     lastSeen,
     lastSeenText,
     position: p ? { lat: p.lat, lon: p.lon, acc: p.acc ?? null, ts: p.ts, src: p.src ?? 'gps' } : null,
