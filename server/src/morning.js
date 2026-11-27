@@ -35,7 +35,8 @@ export async function morningText({ store, since, now = Date.now() }) {
   if (typeof pct === 'number' && pct <= settings.lowBatteryPct) problems.push(`Χαμηλή μπαταρία ${pct}%`);
 
   const alarms = count('alarm');
-  const restarts = count('restart');
+  // Not the ones as the key went off (power on the key, `bikePower`): those come with every ride.
+  const restarts = night.filter((e) => e.type === 'restart' && !e.data?.key).length;
   const touches = typeof tally === 'number' ? tally : 0;
   const parts = [...problems];
   if (!problems.length && !alarms) parts.push('Όλα καλά τη νύχτα');

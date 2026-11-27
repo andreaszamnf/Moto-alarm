@@ -49,11 +49,13 @@ test('lent out: disarmed, a quiet note when it starts, a summary when it stops, 
 
   const res = await report({ reason: 'motion', moving: true }, T0 + min(10));
   assert.equal(res.track, false, 'no alarm');
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].title, 'Η μηχανή ξεκίνησε');
-  assert.equal(sent[0].quiet, true);
+  assert.equal(sent.length, 0, 'a knock in the workshop: nothing yet');
 
   const lat = await ride(report, T0 + min(10), 40, 60); // 10 minutes at 60 km/h
+  const started = sent.filter((p) => p.title === 'Η μηχανή ξεκίνησε');
+  assert.equal(started.length, 1, 'once the GPS sees it go, and once');
+  assert.equal(started[0].quiet, true);
+  assert.equal(sent[0], started[0], 'before anything else');
   const during = await snapshot(store, T0 + min(21));
   assert.equal(during.loan.riding, true);
   assert.ok(during.loan.m > 9000);

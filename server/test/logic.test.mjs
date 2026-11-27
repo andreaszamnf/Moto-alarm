@@ -22,6 +22,7 @@ import {
   stopSignalTest,
   updateSettings,
 } from '../src/logic.js';
+import { morningText } from '../src/morning.js';
 import { MemoryStore } from '../src/store.js';
 
 const PARK = { lat: 37.9838, lon: 23.7275 };
@@ -280,6 +281,31 @@ test('parked while disarmed: a reminder by default, nothing, or arming by itself
   assert.equal(events[0].data.by, 'park');
 });
 
+test('just parked: arming in the app reaches the board within 2 minutes (2026-11-24)', async () => {
+  const { store, sent, report } = setup();
+  const parked = await report({ reason: 'parked', fix: PARK, checkin: 900 }, T0);
+  assert.equal(parked.checkin, 120, 'every 2 minutes while the owner may still arm');
+  assert.equal((await report({ reason: 'checkin', checkin: 120 }, T0 + min(2))).checkin, 120);
+  // Armed in the app 3 minutes after parking: the next check-in tells the board, then every 15 minutes.
+  await setArmed({ store, armed: true, now: T0 + min(3) });
+  const learned = await report({ reason: 'checkin', checkin: 120 }, T0 + min(4));
+  assert.deepEqual([learned.armed, learned.checkin], [true, 900]);
+  // That report still said "every 2 minutes": the next one 15 minutes later is no lost contact.
+  const quiet = await checkOffline({ store, now: T0 + min(4) + min(16), notify: async (p) => sent.push(p) });
+  assert.equal(quiet, false);
+  assert.ok(!sent.some((p) => p.tag === 'moto-offline'));
+
+  // Left disarmed: back to every 15 minutes, 10 minutes after parking.
+  await setArmed({ store, armed: false, now: T0 + min(30) });
+  await report({ reason: 'parked', fix: PARK }, T0 + min(40));
+  assert.equal((await report({ reason: 'checkin', checkin: 120 }, T0 + min(48))).checkin, 120);
+  assert.equal((await report({ reason: 'checkin', checkin: 120 }, T0 + min(50.5))).checkin, 900);
+
+  // «Χαμηλή κατανάλωση»: no extra check-ins.
+  await updateSettings(store, { lowPower: true }, T0 + min(60));
+  assert.equal((await report({ reason: 'parked', fix: PARK }, T0 + min(70))).checkin, 1800);
+});
+
 test('light touches: a quiet notification only when asked, at most every 10 minutes', async () => {
   const { store, sent, report } = setup();
   await report({ reason: 'heartbeat', fix: PARK }, T0);
@@ -366,8 +392,22 @@ test('riding at arming time: it arms when you park', async () => {
   const snap = await snapshot(store);
   assert.equal(snap.armed.armed, false, 'not while riding');
   assert.equal(snap.armOnPark, true);
+  assert.equal(sent.at(-1).body, 'Η μηχανή μόλις κουνήθηκε. Θα οπλίσει μόλις μείνει ακίνητη για 3 λεπτά.', 'the GPS saw it go nowhere');
   const res = await report({ reason: 'parked', fix: PARK }, evening + min(80));
   assert.equal(res.armed, true);
+});
+
+test('riding at arming time, and the GPS saw the bike go: «Οδηγείς τώρα»', async () => {
+  const { store, sent, report } = setup();
+  const notify = async (p) => sent.push(p);
+  const evening = Date.UTC(2026, 10, 18, 20, 0);
+  await updateSettings(store, { schedule: { on: true, arm: '23:00', disarm: '' }, parkAction: 'none' }, evening);
+  const t = Math.floor((evening + min(55)) / 1000);
+  const pts = [0, 1, 2, 3, 4].map((i) => [t + i * 3, PARK.lat + i * 0.00045, PARK.lon, 60]); // 50 m every 3 s
+  await report({ reason: 'ride', moving: true, pts }, evening + min(55) + 15_000);
+  assert.equal(await runAutomation({ store, now: evening + min(62), notify }), 'arm');
+  assert.equal((await snapshot(store)).armed.armed, false);
+  assert.equal(sent.at(-1).body, 'Οδηγείς τώρα. Θα οπλίσει μόλις παρκάρεις.');
 });
 
 test('the schedule never disarms during an alarm', async () => {
@@ -535,7 +575,10 @@ test('«Χαμηλή κατανάλωση»: a check-in every half hour, a ride 
   assert.equal(snap.contactMs, 1800 * 2000 + 5 * 60_000, 'lost contact counts after about an hour');
 
   await report({ reason: 'motion', moving: true, eco: true }, T0 + min(6));
-  snap = await snapshot(store, T0 + min(6));
+  const t6 = Math.floor((T0 + min(6)) / 1000);
+  const pts = [0, 1, 2, 3, 4].map((i) => [t6 + i * 3, 37.98 + i * 0.00045, 23.72, 60]); // 50 m every 3 s
+  await report({ reason: 'ride', moving: true, eco: true, pts }, T0 + min(6) + 15_000);
+  snap = await snapshot(store, T0 + min(6) + 15_000);
   assert.equal(snap.ride.every, 60, 'the ride card knows the board reports every minute');
 
   await updateSettings(store, { lowPower: 'yes' }, T0 + min(7));
@@ -716,10 +759,135 @@ test('bike power: cut while armed sounds the alarm, cut while disarmed tells qui
   assert.equal(sent.at(-1).tag, 'moto-power');
 });
 
+test('bike power on the key: the key turned off is said nowhere, armed or not (2026-11-26)', async () => {
+  const { store, sent } = setup();
+  const pushover = [];
+  const emergency = async (p) => (pushover.push(p), `r${pushover.length}`);
+  const rep = (r, now) => handleReport({ store, report: r, now, notify: async (p) => sent.push(p), emergency });
+  await updateSettings(store, { bikePower: 'key' });
+  await updateSettings(store, { bikePower: 'sometimes' });
+  assert.equal((await snapshot(store, T0)).settings.bikePower, 'key', 'only the two choices');
+
+  // A ride with the key on, then the key off: the board starts afresh as the voltage dips.
+  await rep({ reason: 'ride', ext: true }, T0);
+  await rep({ reason: 'boot', ext: false, rst: 9 }, T0 + min(1));
+  const events = await store.events(5);
+  assert.deepEqual(events.find((e) => e.type === 'power_lost').data, { key: true });
+  assert.deepEqual(events.find((e) => e.type === 'restart').data, { rst: 9, key: true });
+
+  await rep({ reason: 'power_back', ext: true }, T0 + min(2));
+  const back = (await store.events(1))[0];
+  assert.deepEqual([back.type, back.data], ['power_back', { key: true }]);
+  // Armed while the key is still on, then the key off: no alarm.
+  await setArmed({ store, armed: true, now: T0 + min(3) });
+  await rep({ reason: 'power_lost', ext: false }, T0 + min(4));
+  assert.equal(pushover.length, 0, 'no loud alarm');
+  assert.equal((await snapshot(store, T0 + min(4))).alarm.active, false);
+  assert.equal(sent.filter((p) => p.tag === 'moto-power' || p.tag === 'moto-alarm').length, 0, 'no push either');
+
+  // The morning summary counts restarts, but not the one at the key-off.
+  assert.doesNotMatch((await morningText({ store, since: T0 - 1, now: T0 + min(5) })).body, /επανεκκίνηση/);
+  await rep({ reason: 'boot', ext: false, rst: 1 }, T0 + min(6));
+  assert.match((await morningText({ store, since: T0 - 1, now: T0 + min(7) })).body, /1 επανεκκίνηση πλακέτας/);
+});
+
 test('bike power: a board without the field (older firmware) never counts as a power cut', async () => {
   const { store, sent } = setup();
   await setArmed({ store, armed: true, now: T0 });
   await handleReport({ store, report: { reason: 'checkin' }, now: T0 + min(1), notify: async (p) => sent.push(p) });
   await handleReport({ store, report: { reason: 'checkin', ext: false }, now: T0 + min(2), notify: async (p) => sent.push(p) });
   assert.equal((await snapshot(store, T0 + min(2))).alarm.active, false);
+});
+
+test('no motion sensor: armed, every check-in asks for a position, every 5 minutes (2026-11-24)', async () => {
+  const { store, sent, report } = setup();
+  await report({ reason: 'heartbeat', fix: PARK }, T0);
+  const ok = await report({ reason: 'checkin' }, T0 + min(1));
+  assert.deepEqual([ok.locate, ok.checkin], [false, 900]);
+
+  // Disarmed: a warning, but no positions asked for.
+  const off = await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(2));
+  assert.deepEqual([off.locate, off.checkin], [false, 900]);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].title, /αισθητήρας κίνησης δεν απαντά/);
+  assert.equal((await snapshot(store, T0 + min(2))).device.sensor, 'missing');
+
+  await setArmed({ store, armed: true, now: T0 + min(3) });
+  const armedCheckin = await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(4));
+  assert.deepEqual([armedCheckin.locate, armedCheckin.checkin], [true, 300]);
+  // The position comes back where it was parked: nothing. Then 200 m away: "moved".
+  const here = await report({ reason: 'locate', sensor: 'missing', fix: PARK }, T0 + min(4.5));
+  assert.equal(here.locate, false);
+  assert.equal((await snapshot(store, T0 + min(5))).alarm.active, false);
+  await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(9));
+  const away = await report({ reason: 'locate', sensor: 'missing', fix: { lat: PARK.lat + 0.0018, lon: PARK.lon } }, T0 + min(9.5));
+  assert.equal(away.track, true);
+  assert.equal((await snapshot(store, T0 + min(10))).alarm.reason, 'moved');
+  assert.equal(sent.filter((p) => /αισθητήρας/.test(p.title)).length, 1, 'warned once');
+});
+
+test('an old position at a bike standing still is no worry, one after it moved is (2026-11-24)', async () => {
+  const { store, report } = setup();
+  const doubt = async (at) => (await snapshot(store, at)).device.mayHaveMoved;
+  // Parked at T0, then 45 minutes of check-ins and a touch: all without GPS, by design.
+  await report({ reason: 'parked', fix: PARK }, T0);
+  await report({ reason: 'checkin' }, T0 + min(15));
+  await report({ reason: 'touch', tilt: 1 }, T0 + min(20));
+  await report({ reason: 'checkin' }, T0 + min(30));
+  // «Πού είναι τώρα» under a roof: no GPS, yet the board felt no movement.
+  await report({ reason: 'locate' }, T0 + min(31));
+  await report({ reason: 'checkin' }, T0 + min(45));
+  assert.equal(await doubt(T0 + min(45)), null);
+
+  // It felt the bike move: the old position may be wrong until a new one comes, check-ins or not.
+  await report({ reason: 'motion' }, T0 + min(50));
+  await report({ reason: 'checkin' }, T0 + min(65));
+  assert.equal(await doubt(T0 + min(65)), T0 + min(50));
+  await report({ reason: 'ride', pts: [[Math.floor((T0 + min(66)) / 1000), PARK.lat + 0.01, PARK.lon, 40]] }, T0 + min(66));
+  assert.equal(await doubt(T0 + min(66)), null);
+
+  // A restart (it was off) without a fix, and any report while the motion sensor is missing.
+  await report({ reason: 'boot' }, T0 + min(70));
+  assert.equal(await doubt(T0 + min(70)), T0 + min(70));
+  await report({ reason: 'heartbeat', fix: PARK }, T0 + min(71));
+  await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(80));
+  await report({ reason: 'checkin' }, T0 + min(95));
+  assert.equal(await doubt(T0 + min(95)), T0 + min(80), 'the sensor back does not say where the bike went meanwhile');
+});
+
+test('a motion sensor that lost its settings goes in the history, with a push at most once a day (1.8.8)', async () => {
+  const { store, sent, report } = setup();
+  await report({ reason: 'checkin' }, T0);
+  assert.equal((await store.events(5)).filter((e) => e.type === 'sensor_reset').length, 0);
+  await report({ reason: 'checkin', ar: 2 }, T0 + min(15));
+  await report({ reason: 'checkin', ar: 1 }, T0 + min(30));
+  const resets = (await store.events(10)).filter((e) => e.type === 'sensor_reset');
+  assert.deepEqual(resets.map((e) => e.data.n), [1, 2]);
+  assert.deepEqual(sent.map((p) => p.title), ['Ο αισθητήρας κίνησης έχασε τη ρύθμισή του']);
+  await report({ reason: 'checkin', ar: 1 }, T0 + min(15) + 24 * 3_600_000);
+  assert.equal(sent.length, 2, 'again the next day');
+});
+
+test('the sensor\'s wake-up wire making poor contact goes in the history, with a push at most once a day (1.8.9)', async () => {
+  const { store, sent, report } = setup();
+  await report({ reason: 'checkin', ig: 1 }, T0);
+  await report({ reason: 'checkin', im: 2 }, T0 + min(15));
+  const wire = (await store.events(10)).filter((e) => e.type === 'sensor_wire');
+  assert.deepEqual(wire.map((e) => e.data), [{ ghost: 0, missed: 2 }, { ghost: 1, missed: 0 }]);
+  assert.deepEqual(sent.map((p) => p.tag), ['moto-sensor-wire']);
+  await report({ reason: 'checkin' }, T0 + min(30));
+  assert.equal((await store.events(10)).filter((e) => e.type === 'sensor_wire').length, 2, 'nothing when all is well');
+});
+
+test('the motion sensor answering again is told once', async () => {
+  const { sent, report } = setup();
+  await report({ reason: 'checkin' }, T0);
+  await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(15));
+  await report({ reason: 'checkin', sensor: 'missing' }, T0 + min(30));
+  await report({ reason: 'checkin' }, T0 + min(45));
+  await report({ reason: 'checkin' }, T0 + min(60));
+  assert.deepEqual(
+    sent.map((p) => p.title),
+    ['Ο αισθητήρας κίνησης δεν απαντά', 'Ο αισθητήρας κίνησης απαντά ξανά'],
+  );
 });

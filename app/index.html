@@ -103,6 +103,7 @@
             </div>
           </div>
           <button id="btn-arm" class="btn-arm" type="button">Οπλισμός</button>
+          <p id="arm-error" class="arm-error" role="alert" hidden></p>
           <dl class="stats">
             <div><dt>Μπαταρία</dt><dd id="st-battery">—</dd><dd id="st-forecast" class="forecast" hidden></dd></div>
             <div><dt>Σήμα</dt><dd id="st-signal">—</dd><dd id="st-net" class="forecast net" hidden></dd></div>
@@ -578,6 +579,13 @@
 
       <section class="settings-page" data-page="power" hidden>
         <p class="muted">Η πλακέτα καταλαβαίνει μόνη της αν είναι στο ρεύμα (καλώδιο από τη μηχανή ή φορτιστή) ή στη μπαταρία της, και αλλάζει ρυθμό: στο ρεύμα στέλνει «είμαι εδώ» κάθε 5 λεπτά, στη μπαταρία της κάθε 15. Δίπλα σε γνωστό Wi-Fi το modem είναι κλειστό έτσι κι αλλιώς.</p>
+        <label>Ρεύμα από τη μηχανή
+          <select id="set-bikepower">
+            <option value="key">Μόνο με ανοιχτό κλειδί</option>
+            <option value="always">Μόνιμο, και με κλειστό κλειδί</option>
+          </select>
+          <small id="bikepower-note" class="muted"></small>
+        </label>
         <label class="check">
           <input id="set-lowpower" type="checkbox">
           <span>Χαμηλή κατανάλωση
@@ -796,6 +804,8 @@
         <div><dt>Χρόνος</dt><dd id="sp-time">—</dd></div>
         <div><dt>Μέση</dt><dd id="sp-avg">—</dd></div>
         <div><dt>Μέγιστη</dt><dd id="sp-max">—</dd></div>
+        <div><dt>Κλίση</dt><dd id="sp-lean">—</dd></div>
+        <div><dt>Μέγιστη κλίση</dt><dd id="sp-lean-max" class="lean-max">—</dd></div>
       </dl>
       <p id="sp-status" class="muted" aria-live="polite"></p>
       <div class="speedo-buttons">

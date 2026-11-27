@@ -45,6 +45,14 @@ class Modem {
   bool readNetInfo(NetInfo& info);
   // POSTs JSON over HTTPS. Returns the HTTP status (-1 when it did not get through).
   int post(const char* url, const char* bearer, const String& json, String& response);
+  // While post() waits for the server's answer (from 6 s on: most come sooner), a GPS fix every
+  // RIDE_POINT_S goes to `onFix` (nullptr: none). Riding, so the points go on when an answer takes
+  // long (1.9.0).
+  void whileWaiting(void (*onFix)(const Fix&)) { onFix_ = onFix; }
+  // How the last request that went out without a 200 ended ("none 120s …": no answer at all), and
+  // what else the modem said while it waited; "" once cleared (1.9.0).
+  const char* postNote() const { return postNote_; }
+  void clearPostNote() { postNote_[0] = 0; }
   // GETs a binary answer over HTTPS into `out` (at most `max` bytes). Returns its length, or -1.
   int get(const String& url, const char* bearer, uint8_t* out, size_t max);
   // Why the last get() failed, in a few words ("" when it worked).
@@ -63,6 +71,7 @@ class Modem {
   bool command(const String& cmd, uint32_t timeoutMs = 1000, const char* expect = "OK", String* reply = nullptr);
   bool waitFor(const char* expect, uint32_t timeoutMs, String* reply = nullptr);
   bool waitForPrompt(uint32_t timeoutMs);
+  bool waitForAction(uint32_t timeoutMs, String& reply, String& odd);
   bool answers(uint8_t tries);
   bool registered();
   int readSignal();
@@ -77,10 +86,12 @@ class Modem {
   HardwareSerial& port_;
   char note_[64] = "";
   char framing_[48] = "";
+  char postNote_[72] = "";
   bool on_ = false;
   bool gps_ = false;
   bool warm_ = false;
   int signal_ = 0;
   uint32_t poweredAt_ = 0;
   uint32_t registerMs_ = 0;
+  void (*onFix_)(const Fix&) = nullptr;
 };

@@ -34,6 +34,8 @@ const ERRORS = {
   google_key_other: 'Η Google δεν δέχτηκε το κλειδί. Έλεγξε τα βήματα και ξαναδοκίμασε.',
   google_key_unreachable: 'Η Google δεν απάντησε. Ξαναδοκίμασε σε λίγο.',
   'Failed to fetch': 'Δεν υπάρχει σύνδεση με τον server.',
+  offline: 'Δεν υπάρχει σύνδεση με τον server.',
+  timeout: 'Ο server δεν απάντησε εγκαίρως. Ίσως το σήμα είναι αδύναμο.',
 };
 const ALARM_REASON = { motion: 'κίνηση', moved: 'μετακίνηση', tamper: 'παραβίαση συσκευής', power: 'κόπηκε το ρεύμα' };
 const SHARE_LABEL = { 1: '1 ώρα', 24: '24 ώρες', 72: '3 μέρες' };
@@ -55,6 +57,8 @@ const state = {
 const clockFmt = new Intl.DateTimeFormat('el-GR', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const dayFmt = new Intl.DateTimeFormat('el-GR', { day: 'numeric', month: 'short' });
 const serverNow = () => Date.now() + state.clockOffset;
+// A GPS position this much older than the board's last report is shown as old on the map.
+const POSITION_STALE_MS = 10 * 60_000;
 
 function formatTime(ts) {
   const d = new Date(ts);
@@ -135,12 +139,21 @@ function eventText(e) {
     case 'share': return `Κοινοποίηση θέσης για ${SHARE_LABEL[e.data?.hours] ?? `${e.data?.hours} ώρες`}`;
     case 'share_stop': return 'Σταμάτησε η κοινοποίηση θέσης';
     case 'signal_test': return `Δοκιμή σήματος για ${e.data?.minutes} λεπτά`;
+    case 'sensor': return e.data?.ok ? 'Ο αισθητήρας κίνησης απαντά ξανά' : 'Ο αισθητήρας κίνησης σταμάτησε να απαντά';
+    case 'sensor_reset': return 'Ο αισθητήρας κίνησης είχε χάσει τη ρύθμισή του (χαλαρό καλωδιάκι;) και ξαναρυθμίστηκε';
+    case 'sensor_wire': return 'Το σήμα του αισθητήρα κίνησης δεν έφτασε σωστά στην πλακέτα (χαλαρό καλώδιο INT1;)';
     case 'fw_updated': return `Νέο πρόγραμμα στην πλακέτα: ${e.data?.to}`;
     case 'fw_failed': return `Το πρόγραμμα ${e.data?.v} δεν μπήκε, η πλακέτα κράτησε το παλιό`;
     case 'ride': return rideEventText(e.data);
-    case 'restart': return `Η πλακέτα ξεκίνησε από την αρχή: ${RESTART_LABEL[e.data?.rst] ?? `κωδικός ${e.data?.rst}`}`;
-    case 'power_lost': return 'Κόπηκε το ρεύμα της μηχανής: η συσκευή δουλεύει από την εφεδρική μπαταρία';
-    case 'power_back': return 'Ήρθε πάλι ρεύμα από τη μηχανή';
+    case 'restart':
+      return e.data?.key
+        ? 'Η πλακέτα ξεκίνησε από την αρχή μόλις έκλεισε το κλειδί (πέφτει για μια στιγμή η τάση)'
+        : `Η πλακέτα ξεκίνησε από την αρχή: ${RESTART_LABEL[e.data?.rst] ?? `κωδικός ${e.data?.rst}`}`;
+    case 'power_lost':
+      return e.data?.key
+        ? 'Έκλεισε το κλειδί: η συσκευή δουλεύει από τη μπαταρία της'
+        : 'Κόπηκε το ρεύμα της μηχανής: η συσκευή δουλεύει από την εφεδρική μπαταρία';
+    case 'power_back': return e.data?.key ? 'Άνοιξε το κλειδί: ρεύμα από τη μηχανή' : 'Ήρθε πάλι ρεύμα από τη μηχανή';
     default: return extraEventText(e) ?? crashEventText(e) ?? e.type;
   }
 }
@@ -358,6 +371,65 @@ async function act(request, okText) {
   }
 }
 
+// ---------- arming and disarming ----------
+// On 2026-11-24 a disarm pressed before riding off never reached the server, and the GPS check
+// sounded the alarm 14 km on. A failure showed only in a 4-second toast, and a request hanging on a
+// weak signal left the button locked without a word. Now a change is tried again for about half a
+// minute, the button says it is on its way, and a failure stays on the card in red, with a vibration
+// (and a notification if the app is in the background), until it goes through.
+const ARM_TRY_DELAYS_MS = [0, 2_000, 5_000, 10_000];
+const armJob = { want: null, failed: null }; // want: the state on its way; failed: { want, why }
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function armFailText({ want }) {
+  return want
+    ? 'Ο συναγερμός μένει αφοπλισμένος. Πάτα ξανά «Οπλισμός» όταν έχεις σήμα.'
+    : 'Ο συναγερμός μένει οπλισμένος. Πάτα ξανά «Αφοπλισμός» όταν έχεις σήμα.';
+}
+
+async function changeArmed(want) {
+  if (armJob.want === want) return; // already on its way
+  armJob.want = want;
+  armJob.failed = null;
+  render();
+  let lastErr = null;
+  for (const [i, delay] of ARM_TRY_DELAYS_MS.entries()) {
+    if (delay) await pause(delay);
+    if (armJob.want !== want) return; // the other way was asked for meanwhile
+    try {
+      // The try before may have gone through with its answer lost: look first, so that a second
+      // «arm» never clears an alarm that went off in between (arming resets the alarm).
+      const now = i > 0 ? await api('state', { timeoutMs: 8_000 }) : null;
+      const snap =
+        now?.armed?.armed === want ? now : await api('arm', { method: 'POST', body: { armed: want }, timeoutMs: 10_000, keepalive: true });
+      if (armJob.want !== want) return;
+      state.snap = snap;
+      armJob.want = null;
+      toast(want ? 'Ο συναγερμός οπλίστηκε.' : 'Ο συναγερμός αφοπλίστηκε.');
+      navigator.vibrate?.(80);
+      await refresh();
+      return;
+    } catch (err) {
+      if (armJob.want !== want) return;
+      if (err instanceof AuthError) {
+        armJob.want = null;
+        return logout('Η σύνδεση έληξε. Βάλε ξανά τον κωδικό.');
+      }
+      lastErr = err;
+    }
+  }
+  armJob.want = null;
+  armJob.failed = { want, why: errorText(lastErr) };
+  navigator.vibrate?.([300, 150, 300, 150, 300]);
+  render();
+  if (document.hidden) {
+    const title = want ? 'Ο οπλισμός δεν έγινε' : 'Ο αφοπλισμός δεν έγινε';
+    navigator.serviceWorker?.ready
+      .then((reg) => reg.showNotification(title, { body: armFailText(armJob.failed ?? { want }), tag: 'moto-arm' }))
+      .catch(() => {});
+  }
+}
+
 // ---------- rendering ----------
 function render() {
   const snap = state.snap;
@@ -391,7 +463,14 @@ function render() {
 
   $('arm-state').textContent = armed.armed ? 'Οπλισμένος' : 'Αφοπλισμένος';
   // An old position stands in for the parking spot until the board sends a fresh one (parkStale).
-  $('arm-sub').textContent = armed.armed
+  // With the motion sensor not answering only GPS guards the bike: the server asks for a position
+  // every 5 minutes while armed.
+  const blind = device?.sensor === 'missing';
+  $('arm-sub').textContent = blind
+    ? armed.armed
+      ? `Ο αισθητήρας κίνησης δεν απαντά. Η συσκευή δίνει θέση GPS κάθε 5 λεπτά και σε ειδοποιεί αν απομακρυνθεί πάνω από ${settings.parkRadius} μ.`
+      : 'Ο αισθητήρας κίνησης δεν απαντά: η συσκευή δεν καταλαβαίνει αν κουνηθεί η μηχανή.'
+    : armed.armed
     ? armed.park && !armed.parkStale
       ? `Σε ειδοποιεί αν κουνηθεί ή απομακρυνθεί πάνω από ${settings.parkRadius} μ.`
       : armed.park
@@ -400,9 +479,22 @@ function render() {
     : snap.armOnPark
       ? 'Θα οπλίσει μόλις παρκάρεις (πρόγραμμα).'
       : 'Όπλισέ τον όταν αφήνεις τη μηχανή.';
-  $('btn-arm').textContent = armed.armed ? 'Αφοπλισμός' : 'Οπλισμός';
-  $('btn-arm').disabled = state.busy;
-  $('btn-disarm').disabled = state.busy;
+  // A change on its way shows on the button. One that failed stays on the card until it goes
+  // through, or until the server shows that it did after all.
+  if (armJob.failed && armed.armed === armJob.failed.want) armJob.failed = null;
+  const going = armJob.want;
+  $('btn-arm').textContent = going === null ? (armed.armed ? 'Αφοπλισμός' : 'Οπλισμός') : going ? 'Οπλισμός…' : 'Αφοπλισμός…';
+  $('btn-arm').disabled = going !== null;
+  $('btn-disarm').disabled = going === false;
+  const failed = armJob.failed;
+  $('arm-error').hidden = !failed;
+  if (failed) {
+    const title = document.createElement('strong');
+    title.textContent = failed.want ? 'Ο οπλισμός δεν έγινε.' : 'Ο αφοπλισμός δεν έγινε.';
+    const why = document.createElement('small');
+    why.textContent = failed.why;
+    $('arm-error').replaceChildren(title, ` ${armFailText(failed)}`, document.createElement('br'), why);
+  }
 
   // On USB, a charger or the bike's power (firmware 1.7.0 says so): the board cannot measure its
   // battery then, so just "charging", with no percentage or forecast.
@@ -439,10 +531,21 @@ function render() {
     nav.setAttribute('aria-disabled', 'true');
   }
 
-  // A position from Wi-Fi is only roughly right: show how far off it may be.
+  // A position from Wi-Fi is only roughly right: show how far off it may be. A GPS position older
+  // than the last report says how old it is: on 2026-11-24 the map showed the night's position at
+  // home under «πριν 2 λεπτά», after a ride the board had not noticed, and it looked current.
+  // Standing still the board takes no position (to spare the battery), so an old one is still where
+  // the bike is, unless the board felt it move, restarted or had no motion sensor since (server).
   const rough = position?.src === 'wifi';
-  marker.getElement()?.classList.toggle('is-rough', rough);
-  $('map-note').hidden = !rough;
+  const old = Boolean(position) && !rough && device?.lastSeen - position.ts > POSITION_STALE_MS;
+  const stale = old && (device?.sensor === 'missing' || device?.mayHaveMoved > position.ts);
+  marker.getElement()?.classList.toggle('is-rough', rough || stale);
+  $('map-note').hidden = !rough && !old;
+  if (stale) {
+    $('map-note').textContent = `Τελευταία θέση GPS ${timeAgo(position.ts)} (${formatTime(position.ts)}). Τα μηνύματα μετά ήρθαν χωρίς θέση.`;
+  } else if (old) {
+    $('map-note').textContent = `Θέση GPS από τις ${formatTime(position.ts)}. Δεν κουνήθηκε από τότε.`;
+  }
   if (rough) {
     const acc = Math.round(position.acc ?? 100);
     $('map-note').textContent = `Θέση από τα Wi-Fi γύρω της, ${timeAgo(position.ts)} · ακρίβεια περίπου ${acc} μ.`;
@@ -484,6 +587,8 @@ function renderSettings(settings) {
   show('set-radius', String(settings.parkRadius));
   show('set-offline', Boolean(settings.offlineAlert), 'checked');
   show('set-lowpower', Boolean(settings.lowPower), 'checked');
+  show('set-bikepower', settings.bikePower === 'key' ? 'key' : 'always');
+  $('bikepower-note').textContent = BIKE_POWER_NOTE[settings.bikePower === 'key' ? 'key' : 'always'];
   show('set-park', settings.parkAction ?? 'remind');
   show('set-schedule', Boolean(settings.schedule?.on), 'checked');
   show('set-arm-time', settings.schedule?.arm ?? '');
@@ -612,22 +717,28 @@ $('login-form').addEventListener('submit', async (event) => {
 $('btn-arm').addEventListener('click', () => {
   const armed = !state.snap?.armed?.armed;
   if (armed && !confirmArmWhileLent()) return;
-  act(() => api('arm', { method: 'POST', body: { armed } }), armed ? 'Ο συναγερμός οπλίστηκε.' : 'Ο συναγερμός αφοπλίστηκε.');
+  changeArmed(armed);
 });
 
-$('btn-disarm').addEventListener('click', () => {
-  act(() => api('arm', { method: 'POST', body: { armed: false } }), 'Ο συναγερμός αφοπλίστηκε.');
-});
+$('btn-disarm').addEventListener('click', () => changeArmed(false));
 
 $('btn-ack').addEventListener('click', () => act(() => api('alarm/ack', { method: 'POST' })));
 
 $('btn-locate').addEventListener('click', async () => {
   const tracking = state.snap?.armed?.armed && state.snap?.alarm?.active;
+  // Parked, the board checks in every so often (15 minutes, 2 just after parking, 5 without its
+  // motion sensor, 30 with «Χαμηλή κατανάλωση») and picks the request up then. It goes by what the
+  // server's last reply told it (`told`).
+  const device = state.snap?.device;
+  const seconds = device?.checkin > 0 ? device.told || device.checkin : null;
+  const every = seconds > 0 ? Math.max(1, Math.round(seconds / 60)) : null;
   await act(
     () => api('locate', { method: 'POST' }),
     tracking
       ? 'Η θέση ανανεώνεται κάθε 30 δευτερόλεπτα.'
-      : 'Θα έρθει με την επόμενη επικοινωνία της συσκευής. Όταν είναι παρκαρισμένη μπορεί να αργήσει μερικές ώρες.',
+      : every
+        ? `Θα έρθει με την επόμενη επικοινωνία της συσκευής, σε ${every} λεπτά το πολύ.`
+        : 'Θα έρθει με την επόμενη επικοινωνία της συσκευής. Όταν είναι παρκαρισμένη μπορεί να αργήσει μερικές ώρες.',
   );
   centerOnBike();
 });
@@ -766,6 +877,10 @@ const PAGE_TITLES = {
 };
 const SENSITIVITY_LABEL = { 1: 'Χαμηλή', 2: 'Μεσαία', 3: 'Υψηλή' };
 const PARK_LABEL = { remind: 'Υπενθύμιση όταν παρκάρεις', arm: 'Οπλίζει μόλις παρκάρεις', none: 'Μόνο με το χέρι' };
+const BIKE_POWER_NOTE = {
+  key: 'Όταν κλείνεις το κλειδί κόβεται το ρεύμα. Δεν σε ειδοποιεί γι’ αυτό, ούτε χτυπά συναγερμός.',
+  always: 'Αν κοπεί το ρεύμα (κομμένο καλώδιο, βγαλμένη μπαταρία), σε ειδοποιεί. Όταν είναι οπλισμένη, χτυπά συναγερμός.',
+};
 const MAP_LABEL = { light: 'Ανοιχτός', dark: 'Σκούρος', auto: 'Όπως το κινητό' };
 
 function showSettingsPage(page = null) {
@@ -806,7 +921,7 @@ function renderSummaries() {
   $('sum-wifiloc').textContent = state.snap.wifiloc?.google ? 'Από Wi-Fi, με Google' : 'Από Wi-Fi, δωρεάν υπηρεσία';
   const nets = state.snap.wifi?.names ?? [];
   $('sum-wifi').textContent = nets.length ? nets.join(', ') : 'Μόνο όσα μπήκαν από τον υπολογιστή';
-  $('sum-power').textContent = s.lowPower ? 'Χαμηλή: «είμαι εδώ» κάθε μισή ώρα' : 'Κανονική, προσαρμόζεται μόνη της στο ρεύμα';
+  $('sum-power').textContent = `${s.lowPower ? 'Χαμηλή: «είμαι εδώ» κάθε μισή ώρα' : 'Κανονική, προσαρμόζεται μόνη της στο ρεύμα'}${s.bikePower === 'key' ? ' · ρεύμα με το κλειδί' : ''}`;
   const powerNote = powerSyncText(s.lowPower, state.snap.device);
   $('power-sync').hidden = !powerNote;
   $('power-sync').textContent = powerNote;
@@ -958,6 +1073,7 @@ $('set-radius').addEventListener('change', (event) => saveSettings({ parkRadius:
 $('set-sensitivity').addEventListener('change', (event) => saveSettings({ sensitivity: Number(event.currentTarget.value) }));
 $('set-touch').addEventListener('change', (event) => saveSettings({ touchAlerts: event.currentTarget.checked }));
 $('set-lowpower').addEventListener('change', (event) => saveSettings({ lowPower: event.currentTarget.checked }));
+$('set-bikepower').addEventListener('change', (event) => saveSettings({ bikePower: event.currentTarget.value }));
 $('set-park').addEventListener('change', (event) => saveSettings({ parkAction: event.currentTarget.value }));
 for (const id of ['set-schedule', 'set-arm-time', 'set-disarm-time']) {
   $(id).addEventListener('change', () =>

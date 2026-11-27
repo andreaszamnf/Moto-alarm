@@ -16,10 +16,16 @@ class Accel {
  public:
   bool begin(uint8_t sensitivity);  // finds and sets up the sensor; false when it is missing
   bool ok() const { return addr_ != 0; }
+  // Whether begin() had to set the sensor up: a first start, or a sensor that lost its settings
+  // (its power gone for a moment) while the board slept.
+  bool reconfigured() const { return reconfigured_; }
   void setSensitivity(uint8_t sensitivity);
   // Whether the bike moved since the last call. Also makes the current position the new
   // reference for the wake-up interrupt.
   bool consumeMovement();
+  // Whether the sensor has noted movement, without using it up: the next consumeMovement() still
+  // sees it (asking clears the sensor's own note, and lets INT1 go low). 1.8.9.
+  bool movementNoted();
   void clearInterrupt();       // so INT1 is low before deep sleep
   bool gravity(float out[3]);  // direction of gravity (unit vector), averaged over half a second
   // The same from the samples the sensor takes anyway (25 a second), without changing its rate:
@@ -39,4 +45,6 @@ class Accel {
   void rearm();
 
   uint8_t addr_ = 0;
+  bool reconfigured_ = false;
+  bool noted_ = false;  // movement read from the sensor by movementNoted(), not yet consumed
 };

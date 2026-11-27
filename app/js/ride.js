@@ -1,6 +1,8 @@
 // Riding: the live ride from the board, the list of past rides, and a speedometer that uses the
-// phone's own GPS. The board reports every 15 seconds while riding, so its speed is a few seconds
-// old; the speedometer changes every second but needs the phone on the handlebars.
+// phone's own GPS, and its gyroscope for the lean in turns. The board reports every 15 seconds while
+// riding, so its speed is a few seconds old; the speedometer changes every second but needs the phone
+// on the handlebars.
+import { addGps, addRotation, bearingDeg, createLean, leanText, trackLean } from './lean.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -438,6 +440,7 @@ function renderSpeedo(kmh, note) {
   $('sp-km').textContent = kmText(speedo.m);
   $('sp-time').textContent = durationText(speedo.movingS);
   $('sp-avg').textContent = speedo.movingS >= 10 ? speedText((speedo.m / speedo.movingS) * 3.6) : '—';
+  $('sp-lean-max').textContent = maxLeanText(lean.state);
   if (note !== undefined) $('sp-status').textContent = note;
 }
 
@@ -467,7 +470,107 @@ function onPosition(pos) {
   }
   if (good || !prev) speedo.prev = here;
   if (kmh != null && kmh > 300) kmh = null;
+  addGps(lean.state, kmh, headingOf(pos, here, good), pos.timestamp);
   renderSpeedo(kmh, good ? `GPS κινητού · ακρίβεια ${Math.round(accuracy)} μ.` : `Αδύναμο GPS (±${Math.round(accuracy)} μ.): δεν μετράει απόσταση.`);
+}
+
+// ---------- lean in turns, from the phone's gyroscope (see lean.js) ----------
+// The maxima stay, also when the app is closed, until «Μηδενισμός».
+const LEAN_KEY = 'moto-alarm.lean-max';
+const LEAN_TRACK_MS = 100; // the maxima are followed ten times a second
+const LEAN_SHOW_MS = 250; // and the number changes four times a second
+const lean = { state: createLean(), on: false, seen: false, note: null, timer: null, tracked: 0, shown: 0, from: null };
+
+function loadLeanMax() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LEAN_KEY) ?? 'null');
+    if (saved) Object.assign(lean.state, { maxLeft: Number(saved.left) || 0, maxRight: Number(saved.right) || 0 });
+  } catch {
+    // storage unavailable: the maxima last as long as the app
+  }
+}
+
+function saveLeanMax() {
+  try {
+    localStorage.setItem(LEAN_KEY, JSON.stringify({ left: lean.state.maxLeft, right: lean.state.maxRight }));
+  } catch {
+    // as above
+  }
+}
+
+const maxLeanText = (s) => (s.maxLeft || s.maxRight ? `← ${Math.round(s.maxLeft)}° · ${Math.round(s.maxRight)}° →` : '—');
+
+function renderLean(now) {
+  $('sp-lean').textContent = lean.note ?? leanText(now);
+  $('sp-lean').classList.toggle('is-note', Boolean(lean.note));
+  $('sp-lean-max').textContent = maxLeanText(lean.state);
+}
+
+// The phone's own heading (from the satellites' Doppler) when it gives one; otherwise the bearing
+// over the last 20 metres or more, since positions a second apart are too close for a direction.
+function headingOf(pos, here, good) {
+  const { heading, speed } = pos.coords;
+  if (heading != null && Number.isFinite(heading) && (speed == null || speed > 1)) return heading;
+  if (!good) return null;
+  if (!lean.from) {
+    lean.from = here;
+    return null;
+  }
+  if (distanceM(lean.from, here) < 20) return null;
+  const bearing = bearingDeg(lean.from, here);
+  lean.from = here;
+  return bearing;
+}
+
+function onMotion(event) {
+  const r = event.rotationRate;
+  if (!r || r.alpha == null) return; // no gyroscope: the note says so after a while
+  if (!lean.seen) {
+    lean.seen = true;
+    lean.note = null;
+  }
+  const t = event.timeStamp;
+  addRotation(lean.state, [r.beta, r.gamma, r.alpha], t);
+  if (t - lean.tracked < LEAN_TRACK_MS) return;
+  lean.tracked = t;
+  const before = lean.state.maxLeft + lean.state.maxRight;
+  const now = trackLean(lean.state, t);
+  if (lean.state.maxLeft + lean.state.maxRight !== before) saveLeanMax();
+  if (t - lean.shown < LEAN_SHOW_MS) return;
+  lean.shown = t;
+  renderLean(now);
+}
+
+function leanNote(text) {
+  lean.note = text;
+  renderLean(null);
+}
+
+// Runs from the tap that opens the speedometer: the iPhone asks for the motion sensors only then.
+function startLean() {
+  lean.seen = false;
+  lean.note = null;
+  lean.from = null;
+  renderLean(null);
+  const listen = () => {
+    window.addEventListener('devicemotion', onMotion);
+    lean.on = true;
+    clearTimeout(lean.timer);
+    lean.timer = setTimeout(() => {
+      if (lean.on && !lean.seen) leanNote('Χωρίς γυροσκόπιο');
+    }, 3000);
+  };
+  if (typeof DeviceMotionEvent === 'undefined') return leanNote('Χωρίς γυροσκόπιο');
+  if (typeof DeviceMotionEvent.requestPermission !== 'function') return listen();
+  DeviceMotionEvent.requestPermission()
+    .then((answer) => (answer === 'granted' ? listen() : leanNote('Χωρίς άδεια κίνησης')))
+    .catch(() => leanNote('Χωρίς άδεια κίνησης'));
+}
+
+function stopLean() {
+  window.removeEventListener('devicemotion', onMotion);
+  lean.on = false;
+  clearTimeout(lean.timer);
 }
 
 function onPositionError(err) {
@@ -497,6 +600,7 @@ function onVisible() {
 function openSpeedo() {
   const dialog = $('speedo');
   dialog.showModal();
+  startLean(); // first, while the tap still counts (the iPhone's question)
   renderSpeedo(null, 'Ψάχνει GPS…');
   if (!('geolocation' in navigator)) {
     renderSpeedo(null, 'Αυτό το κινητό δεν δίνει θέση στις εφαρμογές.');
@@ -513,6 +617,7 @@ function openSpeedo() {
 }
 
 function closeSpeedo() {
+  stopLean();
   if (speedo.watch !== null) navigator.geolocation.clearWatch(speedo.watch);
   speedo.watch = null;
   speedo.lock?.release().catch(() => {});
@@ -526,6 +631,10 @@ export function setupSpeedo() {
   $('sp-close').addEventListener('click', () => dialog.close());
   $('sp-reset').addEventListener('click', () => {
     Object.assign(speedo, { prev: null, m: 0, movingS: 0, max: 0 });
+    Object.assign(lean.state, { maxLeft: 0, maxRight: 0, recent: [] });
+    saveLeanMax();
     renderSpeedo(null);
+    renderLean(null);
   });
+  loadLeanMax();
 }

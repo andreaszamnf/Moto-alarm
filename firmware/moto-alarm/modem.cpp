@@ -157,6 +157,65 @@ bool Modem::waitFor(const char* expect, uint32_t timeoutMs, String* reply) {
   return false;
 }
 
+// Waits for the "+HTTPACTION:" line that ends a request, as waitFor would. Meanwhile, with onFix_
+// set (riding), it asks the GPS for a fix every RIDE_POINT_S once 6 s have gone by, and hands each
+// one over (1.9.0). On
+// 2026-11-26 two answers never came back: each time the board waited the whole 2 minutes and the
+// ride had no points there (1.8 km at 100-126 km/h, then 0.7 km). The modem takes other commands
+// while a request runs. Nothing is thrown away here (command() would drop waiting lines, and with
+// them the action's own), and a GPS answer still under way is read to its end, so the body read that
+// follows starts clean. Other lines the modem sends meanwhile go to `odd`: what it says when an
+// answer never comes.
+bool Modem::waitForAction(uint32_t timeoutMs, String& reply, String& odd) {
+  String line;
+  bool done = false;
+  bool asked = false;   // a "AT+CGNSSINFO" went out during this wait
+  bool asking = false;  // ... and its "OK" or "ERROR" is not here yet
+  uint32_t askedAt = 0;
+  const uint32_t start = millis();
+  // The first after two points' time: an answer that comes as usual, in a few seconds, needs none.
+  uint32_t nextAsk = start + 2 * RIDE_POINT_S * 1000UL;
+  while (millis() - start < timeoutMs) {
+    const uint32_t now = millis();
+    if (asking && now - askedAt > 2000) asking = false;  // no answer: ask again next time
+    if (done && !asking) return true;
+    if (!done && !asking && onFix_ && gps_ && static_cast<int32_t>(now - nextAsk) >= 0) {
+      port_.print("AT+CGNSSINFO\r");
+      asked = asking = true;
+      askedAt = now;
+      nextAsk = now + RIDE_POINT_S * 1000UL;
+    }
+    while (port_.available()) {
+      const char c = static_cast<char>(port_.read());
+      if (c == '\r') continue;
+      if (c != '\n') {
+        line += c;
+        continue;
+      }
+      line.trim();
+      if (line.startsWith("+HTTPACTION:")) {
+        reply += line;
+        reply += '\n';
+        done = true;
+      } else if (line.startsWith("+CGNSSINFO:")) {
+        Fix fix;
+        if (onFix_ && parseGnssInfo(line.substring(11), fix) && fix.valid) onFix_(fix);
+      } else if (line == "OK" || line == "ERROR" || line.startsWith("+CME ERROR")) {
+        // An error with no question of ours out ends the wait, as waitFor did up to 1.8.9.
+        if (!asked && !done && line != "OK") return false;
+        asking = false;
+      } else if (line.length() && !line.startsWith("AT") && odd.length() < 40) {  // "AT…": our own command echoed
+        if (odd.length()) odd += '|';
+        odd += line.substring(0, 24);
+      }
+      line = "";
+    }
+    esp_task_wdt_reset();
+    delay(5);
+  }
+  return done;
+}
+
 // The modem asks for the SMS text with "> " and no line end, so this looks for the '>' itself.
 bool Modem::waitForPrompt(uint32_t timeoutMs) {
   const uint32_t start = millis();
@@ -437,13 +496,18 @@ int Modem::post(const char* url, const char* bearer, const String& json, String&
 
   int status = -1;
   String reply;
+  String odd;
   bool ok = command(String("+HTTPPARA=\"URL\",\"") + url + "\"", 3000) &&
             command("+HTTPPARA=\"CONTENT\",\"application/json\"", 3000) &&
             command(String("+HTTPPARA=\"USERDATA\",\"Authorization: Bearer ") + bearer + "\"", 3000) &&
             command(String("+HTTPDATA=") + json.length() + ",10000", 10000, "DOWNLOAD");
+  bool sent = false;  // the request went out: its answer is waited for
+  uint32_t sentAt = 0;
   if (ok) {
     port_.print(json);
-    ok = waitFor("OK", 10000) && command("+HTTPACTION=1", 3000) && waitFor("+HTTPACTION:", 120000, &reply);
+    sent = waitFor("OK", 10000) && command("+HTTPACTION=1", 3000);
+    sentAt = millis();
+    ok = sent && waitForAction(120000, reply, odd);
   }
   if (ok) {
     // "+HTTPACTION: 1,200,57": method, status, body length
@@ -454,6 +518,16 @@ int Modem::post(const char* url, const char* bearer, const String& json, String&
       status = reply.substring(c1 + 1, c2).toInt();
       const int length = reply.substring(c2 + 1).toInt();
       if (length > 0 && length < 2048) response = readBody(length);
+    }
+  }
+  // A request that went out and did not end in 200: how it ended, after how long, and what else the
+  // modem said meanwhile ("none 120s +HTTP_…" when no answer came at all). Sent with the next report (1.9.0).
+  if (sent && status != 200) {
+    const unsigned long secs = (millis() - sentAt) / 1000;
+    if (ok) {
+      snprintf(postNote_, sizeof postNote_, "%d %lus %s", status, secs, odd.c_str());
+    } else {
+      snprintf(postNote_, sizeof postNote_, "none %lus %s", secs, odd.c_str());
     }
   }
   command("+HTTPTERM", 2000);

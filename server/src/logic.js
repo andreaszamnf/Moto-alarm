@@ -4,7 +4,7 @@
 import { crashReply, crashView, shortName } from './crash.js';
 import { compareVersions, firmwareEvents, firmwareOffer, validVersion } from './firmware.js';
 import { endLoan, loanNews, loanView } from './loan.js';
-import { endRide, normalizePoints, rideSeconds, rideView, trackRide } from './rides.js';
+import { endRide, hasMovedOff, normalizePoints, rideSeconds, rideView, trackRide } from './rides.js';
 import { GOOGLE_PER_MONTH, googleUsage, normalizeWifi } from './wifiloc.js';
 
 export const DEFAULTS = Object.freeze({
@@ -29,13 +29,35 @@ export const DEFAULTS = Object.freeze({
   // «Χαμηλή κατανάλωση»: a check-in every half hour (also on the bike's power), a ride report every
   // minute, and the modem off while parked (firmware 1.8.2 on). An alarm still tracks as usual.
   lowPower: false,
+  // How the bike powers the board: 'always' (straight from its battery, so power going away is news:
+  // wires cut, the battery taken out; armed, an alarm) or 'key' (only with the ignition on, like a
+  // socket that the key switches: every key-off cuts it, and nothing is said). Since 2026-11-26 the
+  // owner's board gets its power with the key, and each key-off brought «Κόπηκε το ρεύμα».
+  bikePower: 'always',
 });
 
 export const LOW_POWER_CHECKIN_MINUTES = 30;
+// No motion sensor (the board reports it "missing"): while armed only GPS can tell that the bike was
+// taken, so the board checks in this often and every check-in asks for a position. On 2026-11-24 the
+// sensor had stopped answering since the evening before, and the board slept through a 22 km ride.
+export const BLIND_CHECKIN_MINUTES = 5;
+// Standing still, the board sends no position (check-ins, touches): the last one is still where the
+// bike is. These reports say it moved, or may have (a restart: it was off), so until a report brings
+// a position the app says the one on the map may be wrong (`device.mayHaveMoved`, also set while the
+// motion sensor is missing). On 2026-11-24 the app called a 32-minute-old position at a parked,
+// armed bike stale, and the owner worried for nothing.
+const MOVED_REASONS = new Set(['motion', 'ride', 'track', 'crash', 'parked', 'boot']);
+// Arming in the app reaches the board only with its next report. Until then the board takes itself
+// for disarmed, and a light touch goes unreported: on 2026-11-24 the owner armed 5 minutes after
+// parking, shook the bike, and nothing came. So for 10 minutes after it parks, while still disarmed,
+// the board checks in every 2 minutes instead of every 15 (a check-in costs a few seconds of radio).
+const ARM_LISTEN_MS = 10 * 60_000;
+const ARM_LISTEN_CHECKIN_S = 120;
 
 export const TIME_ZONE = 'Europe/Athens';
 export const PARK_RADIUS_CHOICES = Object.freeze([30, 50, 100, 200]);
 export const PARK_ACTIONS = Object.freeze(['none', 'remind', 'arm']);
+export const BIKE_POWER = Object.freeze(['always', 'key']);
 export const SHARE_HOURS = Object.freeze([1, 24, 72]);
 export const SIGNAL_TEST_MINUTES = Object.freeze([30, 60, 120]);
 const SIGNAL_TEST_HEARTBEAT_S = 120; // during a signal test the device reports every 2 minutes
@@ -156,6 +178,7 @@ export async function updateSettings(store, patch, now = Date.now()) {
   if (typeof patch?.touchAlerts === 'boolean') saved.touchAlerts = patch.touchAlerts;
   if (typeof patch?.lowPower === 'boolean') saved.lowPower = patch.lowPower;
   if (PARK_ACTIONS.includes(patch?.parkAction)) saved.parkAction = patch.parkAction;
+  if (BIKE_POWER.includes(patch?.bikePower)) saved.bikePower = patch.bikePower;
   const phone = normalizePhone(patch?.callNumber);
   if (phone !== null) saved.callNumber = phone;
   if (patch?.crash && typeof patch.crash === 'object') {
@@ -370,12 +393,23 @@ export async function handleReport({
   const running = validVersion(report?.fw) ? report.fw : null;
 
   const deviceBefore = await store.get('device');
-  await store.set('device', {
+  const deviceNow = {
     lastSeen: now,
     reason,
+    parkedAt: reason === 'parked' ? now : deviceBefore?.parkedAt ?? null, // see ARM_LISTEN_MS
     batt,
     rssi: finite(report?.rssi),
     tilt: finite(report?.tilt),
+    // The motion sensor answered at this wake-up: the board adds "missing" when it does not.
+    sensor: report?.sensor === 'missing' ? 'missing' : 'ok',
+    // The latest report after which the bike may be somewhere other than its last position
+    // (MOVED_REASONS, or no motion sensor); null once a report brings a position.
+    mayHaveMoved:
+      fix || points.length
+        ? null
+        : MOVED_REASONS.has(reason) || report?.sensor === 'missing'
+          ? now
+          : deviceBefore?.mayHaveMoved ?? null,
     fw: running,
     wifiv: finite(report?.wifiv), // which list of Wi-Fi networks the board has
     // How it got through this time: a known Wi-Fi (name and signal) or 4G (rssi above).
@@ -391,26 +425,60 @@ export async function handleReport({
     // ("1.8.7 4g@16384 odd: +HTTPREAD: …"), and how the modem framed its last answer over 4G.
     otaErr: typeof report?.otaErr === 'string' ? { text: report.otaErr.slice(0, 80), at: now } : deviceBefore?.otaErr ?? null,
     hr: typeof report?.hr === 'string' ? { text: report.hr.slice(0, 60), at: now } : deviceBefore?.hr ?? null,
-  });
+    // Firmware 1.9.0 on: how its last request over 4G that went out went wrong, sent with the next
+    // report that gets through ("none 120s …": no answer in 2 minutes, then what else the modem said).
+    hw: typeof report?.hw === 'string' ? { text: report.hw.slice(0, 80), at: now } : deviceBefore?.hw ?? null,
+    // The check-in interval this reply gives it (below): the next report is due by then.
+    told: deviceBefore?.told ?? null,
+  };
+  await store.set('device', deviceNow);
   await firmwareEvents({ store, before: deviceBefore?.fw ?? null, running, now });
-  // The board started afresh instead of waking from its sleep: power came back, the voltage
-  // fell too low, a crash. Kept in the history so a battery that cuts out shows up.
-  const rst = finite(report?.rst);
-  if (rst !== null && rst > 0) await store.addEvent('restart', { rst }, now);
   // The bike's power going away (wires cut, battery taken out) or coming back. Both reports must
   // say: older firmware sends nothing, and a board that just started afresh still says ext false.
+  // With the power on the key (`bikePower` 'key') that is just the key turned off or on.
   const extBefore = deviceBefore?.ext ?? null;
   const extNow = typeof report?.ext === 'boolean' ? report.ext : null;
+  const keyPower = settings.bikePower === 'key';
   const powerLost = extBefore === true && extNow === false;
-  if (powerLost) await store.addEvent('power_lost', {}, now);
-  if (extBefore === false && extNow === true) await store.addEvent('power_back', {}, now);
+  const powerBack = extBefore === false && extNow === true;
+  // The board started afresh instead of waking from its sleep: power came back, the voltage
+  // fell too low, a crash. Kept in the history so a battery that cuts out shows up. With the power
+  // on the key it often restarts as the key goes off: the voltage dips while it moves from the
+  // bike's power to its own battery (rst 9 with the cell at 97%, 2026-11-26 12:57). Marked, so the
+  // morning summary does not count it.
+  const rst = finite(report?.rst);
+  if (rst !== null && rst > 0) await store.addEvent('restart', keyPower && powerLost ? { rst, key: true } : { rst }, now);
+  if (powerLost) await store.addEvent('power_lost', keyPower ? { key: true } : {}, now);
+  if (powerBack) await store.addEvent('power_back', keyPower ? { key: true } : {}, now);
+  // The motion sensor stopped answering, or answers again. Without it the board feels no movement.
+  const sensorBefore = deviceBefore?.sensor ?? null;
+  const sensorNow = report?.sensor === 'missing' ? 'missing' : 'ok';
+  if (sensorBefore && sensorBefore !== sensorNow) {
+    await store.addEvent('sensor', { ok: sensorNow === 'ok' }, now);
+    const warned = await store.get('sensor_warned');
+    if (sensorNow === 'missing' && !(warned && now - warned < DAY_MS)) {
+      await store.set('sensor_warned', now);
+      await notify({
+        title: 'Ο αισθητήρας κίνησης δεν απαντά',
+        body: `Η συσκευή δεν καταλαβαίνει αν κουνηθεί η μηχανή. Όσο είναι οπλισμένη, δίνει θέση GPS κάθε ${BLIND_CHECKIN_MINUTES} λεπτά.`,
+        tag: 'moto-sensor',
+      });
+    } else if (sensorNow === 'ok' && warned) {
+      await store.set('sensor_warned', null);
+      await notify({ title: 'Ο αισθητήρας κίνησης απαντά ξανά', body: 'Η συσκευή καταλαβαίνει πάλι αν κουνηθεί η μηχανή.', tag: 'moto-sensor' });
+    }
+  }
   await store.set('offline_warned', null);
   if (fix) {
     await store.set('last_fix', fix);
     if (!points.length) await store.addPosition(fix);
   }
   if (points.length) {
-    await store.addPositions(points);
+    // A report whose answer never reached the board comes again with the same points: on 2026-11-26
+    // twice on one ride, and those points stood twice on the map. The ones already kept stay out.
+    const kept = new Set((await store.positions(points[0].ts, points[points.length - 1].ts)).map((p) => p.ts));
+    const fresh = points.filter((p) => !kept.has(p.ts));
+    if (fresh.length) await store.addPositions(fresh);
     if (!fix) await store.set('last_fix', points[points.length - 1]);
   }
   const signalTest = await store.get('signal_test');
@@ -443,6 +511,39 @@ export async function handleReport({
   // Light touches the board counted since its last report, for the morning summary.
   const touches = finite(report?.touches);
   if (touches !== null && touches > 0) await store.set('touch_tally', ((await store.get('touch_tally')) ?? 0) + Math.min(touches, 1000));
+  // Firmware 1.8.8 on: wakes since the last report that found the motion sensor without its settings.
+  // It had lost its power for a moment, a loose wire most likely, and felt nothing until set up again
+  // (on 2026-11-24 a hard shake at 21:36 went unnoticed). Kept in the history, a push at most daily.
+  // Firmware 1.8.9 on: the wake-up wire (INT1 to IO39). `ig`: wakes through it with nothing moving
+  // (the line high by itself), `im`: movement the sensor noted that never reached the board (the
+  // line read low). Either says the wire makes poor contact. A push at most once a day.
+  const ghost = finite(report?.ig);
+  const missed = finite(report?.im);
+  if ((ghost ?? 0) > 0 || (missed ?? 0) > 0) {
+    await store.addEvent('sensor_wire', { ghost: Math.min(Math.round(ghost ?? 0), 255), missed: Math.min(Math.round(missed ?? 0), 255) }, now);
+    const warned = await store.get('wire_warned');
+    if (!(warned && now - warned < DAY_MS)) {
+      await store.set('wire_warned', now);
+      await notify({
+        title: 'Χαλαρό καλωδιάκι στον αισθητήρα κίνησης',
+        body: 'Το σήμα κίνησης (καλώδιο INT1, 11η τρύπα, IO39) δεν φτάνει σωστά στην πλακέτα. Για λίγο εκείνη ελέγχει για κίνηση κάθε 2 λεπτά. Κόλλησε το καλώδιο.',
+        tag: 'moto-sensor-wire',
+      });
+    }
+  }
+  const resets = finite(report?.ar);
+  if (resets !== null && resets > 0) {
+    await store.addEvent('sensor_reset', { n: Math.min(Math.round(resets), 255) }, now);
+    const warned = await store.get('reset_warned');
+    if (!(warned && now - warned < DAY_MS)) {
+      await store.set('reset_warned', now);
+      await notify({
+        title: 'Ο αισθητήρας κίνησης έχασε τη ρύθμισή του',
+        body: 'Μάλλον του κόπηκε το ρεύμα για μια στιγμή, από χαλαρό καλωδιάκι. Η πλακέτα τον ξαναρύθμισε, αλλά ως τότε δεν ένιωθε κίνηση.',
+        tag: 'moto-sensor',
+      });
+    }
+  }
 
   let sms = null;
   if (armed.armed) {
@@ -469,7 +570,8 @@ export async function handleReport({
     const movedBeforeArming = reason === 'ride' ? beforeArming(lastMove) : reason !== 'motion' && beforeArming(movingSince);
     if (reason === 'motion' || (report?.moving === true && !movedBeforeArming)) trigger = 'motion';
     if (reason === 'tamper') trigger = 'tamper';
-    if (powerLost) trigger = 'power';
+    // On the key the power is gone while parked anyway: arming before turning the key off is no theft.
+    if (powerLost && !keyPower) trigger = 'power';
     // Only GPS decides "moved": a position from Wi-Fi can be off by a street or more. Against an old
     // fix standing in, only while the bike is on the move: a still bike may simply not be where that
     // old fix was taken.
@@ -523,8 +625,9 @@ export async function handleReport({
     }
   }
 
-  // Disarmed: worth knowing, not an alarm (e.g. the battery taken out for the winter).
-  if (powerLost && !armed.armed) {
+  // Disarmed: worth knowing, not an alarm (e.g. the battery taken out for the winter). On the key,
+  // the key turned off: nothing to say.
+  if (powerLost && !armed.armed && !keyPower) {
     await notify({
       title: 'Κόπηκε το ρεύμα της μηχανής',
       body: 'Η συσκευή δουλεύει τώρα από την εφεδρική της μπαταρία.',
@@ -537,6 +640,16 @@ export async function handleReport({
     await store.set('pending', {});
     locate = false;
   }
+  // No motion sensor: while armed every check-in asks for a GPS position, so a bike taken away
+  // still comes out as "moved" (above) within BLIND_CHECKIN_MINUTES.
+  const blind = armed.armed && sensorNow === 'missing';
+  if (blind && reason === 'checkin' && !fix) locate = true;
+  const checkinMinutes = settings.lowPower ? LOW_POWER_CHECKIN_MINUTES : extNow ? settings.checkInPoweredMinutes : settings.checkInMinutes;
+  let checkin = (blind ? Math.min(checkinMinutes, BLIND_CHECKIN_MINUTES) : checkinMinutes) * 60;
+  // Just parked and still disarmed: soon after, so that arming in the app reaches it in time.
+  const listening = !armed.armed && !settings.lowPower && deviceNow.parkedAt !== null && now - deviceNow.parkedAt < ARM_LISTEN_MS;
+  if (listening) checkin = Math.min(checkin, ARM_LISTEN_CHECKIN_S);
+  if (deviceNow.told !== checkin) await store.set('device', { ...deviceNow, told: checkin });
 
   const update = await firmwareOffer({
     store,
@@ -560,7 +673,7 @@ export async function handleReport({
     heartbeat: testing ? SIGNAL_TEST_HEARTBEAT_S : settings.heartbeatMinutes * 60,
     // On the bike's power a check-in costs no battery, so more often; with «Χαμηλή κατανάλωση» every
     // half hour either way (also spares the bike's own battery when it stands for weeks).
-    checkin: (settings.lowPower ? LOW_POWER_CHECKIN_MINUTES : extNow ? settings.checkInPoweredMinutes : settings.checkInMinutes) * 60,
+    checkin,
     trackInterval: settings.trackSeconds,
     rideInterval: rideSeconds(settings), // firmware 1.6.0 and later
     eco: settings.lowPower === true, // the modem off while parked (firmware 1.8.2 and later)
@@ -743,7 +856,11 @@ async function applySchedule({ store, arm, now, notify }) {
     const riding = device?.lastSeen && now - device.lastSeen < RIDING_RECENT_MS && ['motion', 'ride'].includes(device.reason);
     if (riding) {
       await store.set('arm_on_park', now);
-      await notify({ title: 'Πρόγραμμα συναγερμού', body: 'Οδηγείς τώρα. Θα οπλίσει μόλις παρκάρεις.', tag: 'moto-schedule' });
+      // Only felt a knock, the GPS saw it go nowhere: it arms once the board says it stands still.
+      const body = hasMovedOff(await store.get('ride'))
+        ? 'Οδηγείς τώρα. Θα οπλίσει μόλις παρκάρεις.'
+        : 'Η μηχανή μόλις κουνήθηκε. Θα οπλίσει μόλις μείνει ακίνητη για 3 λεπτά.';
+      await notify({ title: 'Πρόγραμμα συναγερμού', body, tag: 'moto-schedule' });
       return;
     }
     await setArmed({ store, armed: true, now, by: 'schedule' });
@@ -978,7 +1095,9 @@ export function quickStatus(snap) {
 // heartbeat plus the grace time; during an alarm ten tracking reports.
 export function contactWindowMs(device, alarm, settings) {
   if (alarm?.active) return settings.trackSeconds * 10_000 + settings.offlineGraceMinutes * 60_000;
-  if (device?.checkin > 0) return device.checkin * 2_000 + 5 * 60_000;
+  // A board that checks in (it says how often): the longer of that and what its last reply told it.
+  // Going from 2-minute check-ins back to 15, its last report still says 2 minutes.
+  if (device?.checkin > 0) return Math.max(device.checkin, device.told ?? 0) * 2_000 + 5 * 60_000;
   return (settings.heartbeatMinutes + settings.offlineGraceMinutes) * 60_000;
 }
 

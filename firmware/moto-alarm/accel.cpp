@@ -88,6 +88,7 @@ bool Accel::readXYZ(float v[3]) {
 bool Accel::begin(uint8_t sensitivity) {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
   addr_ = 0;
+  reconfigured_ = false;
   for (uint8_t candidate : {0x53, 0x1D}) {  // SDO to GND, or SDO to 3.3 V
     addr_ = candidate;
     if (read(REG_DEVID) == DEVICE_ID) break;
@@ -100,6 +101,7 @@ bool Accel::begin(uint8_t sensitivity) {
       read(REG_THRESH_ACT) == profile(sensitivity).wakeSteps) {
     return true;
   }
+  reconfigured_ = true;
   write(REG_POWER_CTL, 0);  // standby while setting up
   write(REG_DATA_FORMAT, FULL_RES_2G);
   write(REG_FIFO_CTL, 0);
@@ -131,13 +133,21 @@ void Accel::rearm() {
 
 bool Accel::consumeMovement() {
   if (!ok()) return false;
-  const bool moved = (read(REG_INT_SOURCE) & ACTIVITY) != 0;
+  const bool moved = noted_ || (read(REG_INT_SOURCE) & ACTIVITY) != 0;
+  noted_ = false;
   rearm();
   return moved;
 }
 
+bool Accel::movementNoted() {
+  if (!ok()) return false;
+  if (read(REG_INT_SOURCE) & ACTIVITY) noted_ = true;
+  return noted_;
+}
+
 void Accel::clearInterrupt() {
   if (ok()) read(REG_INT_SOURCE);
+  noted_ = false;
 }
 
 bool Accel::gravity(float out[3]) {

@@ -20,25 +20,42 @@ export function setToken(token) {
   }
 }
 
-export async function api(path, { method = 'GET', body } = {}) {
+// Every request gives up after `timeoutMs`: on a weak signal one used to hang for minutes, with the
+// buttons locked meanwhile. A failed connection comes out as "offline", a request with no answer in
+// time as "timeout". `keepalive` lets a request go on when the phone is locked right after a tap.
+export async function api(path, { method = 'GET', body, timeoutMs = 20_000, keepalive = false } = {}) {
   const headers = { Accept: 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(`api/${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    cache: 'no-store',
-  });
-  let data = {};
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    data = await res.json();
-  } catch {
-    // Non-JSON error page; fall through to the status check.
+    let res;
+    try {
+      res = await fetch(`api/${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        cache: 'no-store',
+        keepalive,
+        signal: controller.signal,
+      });
+    } catch {
+      throw new Error(controller.signal.aborted ? 'timeout' : 'offline');
+    }
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {
+      if (controller.signal.aborted) throw new Error('timeout');
+      // Non-JSON error page; fall through to the status check.
+    }
+    if (res.status === 401) throw new AuthError(data.error || 'unauthorized');
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  } finally {
+    clearTimeout(timer);
   }
-  if (res.status === 401) throw new AuthError(data.error || 'unauthorized');
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
 }

@@ -2,7 +2,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FIRMWARE_VERSION "1.8.7"
+#define FIRMWARE_VERSION "1.9.0"
 
 // Modem pins, as in LilyGO's utilities.h for LILYGO_SIM7600X.
 constexpr int MODEM_RX_PIN = 26;      // the ESP32 receives from the modem here
@@ -26,11 +26,18 @@ constexpr uint32_t RIDING_CHECK_S = 60;           // riding: how often to look f
 constexpr uint32_t PARK_AFTER_S = 3 * 60;         // riding: still this long means parked
 constexpr uint32_t DEFAULT_RIDE_LIVE_S = 15;      // riding: a live report this often (the server can change it)
 constexpr uint32_t RIDE_POINT_S = 3;              // riding: a GPS point this often, sent with the next report
-constexpr uint8_t MAX_RIDE_POINTS = 40;           // points kept while reports do not get through
+// Points kept while reports do not get through: 3 minutes (2 before 1.9.0). An answer that never
+// comes keeps the board waiting 2 minutes, and since 1.9.0 the points go on meanwhile.
+constexpr uint8_t MAX_RIDE_POINTS = 60;
 constexpr float RIDE_MOVING_KMH = 5;              // riding: GPS speed that counts as moving
+// An alarm the owner ends by disarming: moved in the last this many seconds (or the GPS sees speed),
+// the bike rolls on, and the live ride starts at once (1.9.0).
+constexpr uint32_t ROLL_ON_S = 30;
 constexpr uint32_t ALARM_IDLE_AFTER_S = 10 * 60;  // alarm: still this long, report less often
 constexpr uint32_t ALARM_IDLE_REPORT_S = 5 * 60;
 constexpr uint32_t POWER_CHECK_S = 60;            // parked on the bike's power: look this often whether it is still there
+constexpr uint32_t SENSOR_CHECK_S = 2 * 60;       // parked: wake this often to see that the motion sensor still has its settings (1.8.8)
+constexpr uint32_t INT_DISTRUST_S = 60 * 60;      // after INT1 woke the board with no movement noted: this long without it (1.8.9)
 constexpr uint32_t MOVED_AGAIN_AFTER_S = 5;       // alarm: still this long, then moved = new movement, reported at once
 constexpr uint32_t TOUCH_BURST_WINDOW_S = 120;    // this many light touches within this window
 constexpr uint8_t TOUCH_BURST_COUNT = 3;          // count as real movement

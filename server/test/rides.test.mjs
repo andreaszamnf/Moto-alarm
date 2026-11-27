@@ -51,7 +51,7 @@ test('riding: every point is kept and the app sees speed, distance and time as t
   const { store, report } = setup();
   const res = await report({ reason: 'motion', moving: true }, T0);
   assert.equal(res.rideInterval, 15, 'the board learns how often to report');
-  assert.ok((await snapshot(store, T0)).ride, 'the ride shows at once');
+  assert.equal((await snapshot(store, T0)).ride, null, 'not before the GPS sees the bike go: it may be a knock');
 
   // Two reports of five points each at 60 km/h, 3 seconds apart: 27 seconds, 450 m.
   const first = northPoints(T0 + sec(3), 5, 60);
@@ -69,6 +69,25 @@ test('riding: every point is kept and the app sees speed, distance and time as t
   assert.equal(ride.movingS, 27);
   assert.equal(ride.avg, 60);
   assert.equal(position.lat, second[4][1], 'the bike on the map is where the newest point is');
+});
+
+test('an answer that never reached the board: the points it sends again are kept once (2026-11-26)', async () => {
+  const { store, report } = setup();
+  await report({ reason: 'motion', moving: true }, T0);
+  const first = northPoints(T0 + sec(3), 5, 100);
+  const later = northPoints(T0 + sec(18), 40, 100, first[4][1] + (100 / 3.6 / 111_195) * 3);
+  await report({ reason: 'ride', moving: true, pts: first }, T0 + sec(16));
+  // Its answer got lost: the board waited 2 minutes, taking points meanwhile (firmware 1.9.0), then
+  // sent everything again, saying how the request had ended.
+  await report({ reason: 'ride', moving: true, pts: [...first, ...later], fails: 1, hw: 'none 120s +HTTP_NONET_EVENT' }, T0 + min(2) + sec(20));
+  const positions = await store.positions(T0, T0 + min(3));
+  assert.equal(positions.length, 45, 'each point once');
+  assert.equal(new Set(positions.map((p) => p.ts)).size, 45);
+  const ride = await store.get('ride');
+  assert.equal(ride.movingS, 132, 'the time counted once: 44 steps of 3 s');
+  assert.deepEqual((await store.get('device')).hw, { text: 'none 120s +HTTP_NONET_EVENT', at: T0 + min(2) + sec(20) });
+  await report({ reason: 'ride', moving: true, pts: northPoints(T0 + min(2) + sec(18), 5, 100, later[39][1]) }, T0 + min(2) + sec(35));
+  assert.equal((await store.get('device')).hw.text, 'none 120s +HTTP_NONET_EVENT', 'kept until something newer comes');
 });
 
 test('points taken before the report that started the ride still belong to it, from its start', async () => {
@@ -93,9 +112,31 @@ test('standing at a red light: the GPS wandering adds no distance', async () => 
   // Standing still, the GPS position jumps around by a few metres each time.
   const pts = [0, 1, 2, 3, 4, 5].map((i) => [t + i * 3, START.lat + (i % 2) * 0.00005, START.lon, 1.2]);
   await report({ reason: 'ride', pts }, T0 + sec(20));
-  const { ride } = await snapshot(store, T0 + sec(20));
+  const ride = await store.get('ride');
   assert.equal(ride.m, 0);
   assert.equal(ride.movingS, 0);
+  assert.equal((await snapshot(store, T0 + sec(20))).ride, null, 'and no «Οδηγείς τώρα» for a bike that went nowhere');
+});
+
+test('a knock on the desk: no «Οδηγείς τώρα» until the GPS sees the bike go 50 m (2026-11-24)', async () => {
+  const { store, report } = setup();
+  // The board on a desk at home, disarmed: every knock starts a "ride", the GPS sees it stand.
+  const t = Math.floor(T0 / 1000);
+  await report({ reason: 'motion', moving: true }, T0);
+  const desk = [0, 1, 2, 3].map((i) => [t + 60 + i * 3, START.lat + (i % 2) * 0.00002, START.lon, i % 2]);
+  await report({ reason: 'ride', moving: true, pts: desk }, T0 + sec(75));
+  assert.equal((await snapshot(store, T0 + sec(75))).ride, null);
+  await report({ reason: 'parked', fix: { ...START, spd: 0 } }, T0 + min(4));
+  assert.deepEqual(await tripList(store), [], 'nothing in the history either');
+
+  // A real start: 30 m at walking pace is not yet a ride, 50 m at 20 km/h is.
+  await report({ reason: 'motion', moving: true }, T0 + min(10));
+  await report({ reason: 'ride', moving: true, pts: northPoints(T0 + min(10), 3, 18) }, T0 + min(10) + sec(10));
+  assert.equal((await snapshot(store, T0 + min(10) + sec(10))).ride, null, '30 m');
+  await report({ reason: 'ride', moving: true, pts: northPoints(T0 + min(10) + sec(9), 3, 20, START.lat + 0.00027) }, T0 + min(10) + sec(20));
+  const { ride } = await snapshot(store, T0 + min(10) + sec(20));
+  assert.ok(ride && ride.m >= 50, `shown from 50 m, got ${ride?.m}`);
+  assert.equal(ride.start, T0 + min(10), 'counted from where it started');
 });
 
 test('parked: the ride is kept with its summary and goes into the history', async () => {

@@ -83,6 +83,11 @@ struct State {
   double standLon;
   uint8_t uprightSamples;  // riding: readings at speed in `upright` since it was last learned anew (1.8.5)
   uint8_t oddSamples;      // riding: readings at speed in a row far from upright (1.8.5)
+  time_t nextMotionTry;    // parked, movement not reported yet (no signal): when to try again (1.8.8)
+  uint8_t sensorResets;    // wakes since the last report that found the motion sensor without its settings (1.8.8)
+  uint8_t ghostWakes;      // wakes through INT1 with no movement noted, since the last report (1.8.9)
+  uint8_t wireMisses;      // movement noted that never reached IO39 (INT1 read low), since the last report (1.8.9)
+  time_t intDistrustUntil;  // until then INT1 does not wake the board: the 2-minute checks look instead (1.8.9)
 };
 
 constexpr uint32_t STATE_MAGIC = 0x4D4F5431;  // "MOT1"
@@ -140,6 +145,22 @@ struct RidePoint {
 };
 RidePoint ridePoints[MAX_RIDE_POINTS];
 uint8_t ridePointCount = 0;
+// The newest point the last report carried (0: none). Once it got through, the points up to it go;
+// those taken while it waited for its answer stay for the next one (1.9.0).
+uint32_t ridePointsSentUpTo = 0;
+
+void dropSentRidePoints() {
+  uint8_t kept = 0;
+  for (uint8_t i = 0; i < ridePointCount; i++) {
+    if (ridePoints[i].t > ridePointsSentUpTo) ridePoints[kept++] = ridePoints[i];
+  }
+  ridePointCount = kept;
+}
+
+// The owner ended an alarm by disarming while the bike rolled on: runOnce goes straight into the live
+// ride (1.9.0). On 2026-11-26 the owner rode off armed at 21:05 and disarmed at 21:09; the board first
+// slept its riding minute, and the ride's first minute had no points.
+bool rollOn = false;
 
 void runAlarm(bool urgent = false);
 void takeReference();
@@ -192,6 +213,7 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
     f["spd"] = serialized(String(fix->speedKmh, 1));
     if (fix->time) f["t"] = fix->time;
   }
+  ridePointsSentUpTo = 0;
   if (ridePointCount) {
     JsonArray pts = doc["pts"].to<JsonArray>();
     for (uint8_t i = 0; i < ridePointCount; i++) {
@@ -201,6 +223,7 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
       p.add(serialized(String(ridePoints[i].lon, 6)));
       p.add(serialized(String(ridePoints[i].kmh, 1)));
     }
+    ridePointsSentUpTo = ridePoints[ridePointCount - 1].t;
   }
   if (!(fix && fix->valid) && fix && nearbyCount) {
     JsonArray wifi = doc["wifi"].to<JsonArray>();
@@ -241,6 +264,9 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
   // stand) does not count as a theft.
   if (moving && !strcmp(reason, "ride") && st.lastMoved > 1600000000L) doc["lastMove"] = static_cast<long>(st.lastMoved);
   if (st.touches) doc["touches"] = st.touches;
+  if (st.sensorResets) doc["ar"] = st.sensorResets;  // the motion sensor had lost its settings (1.8.8)
+  if (st.ghostWakes) doc["ig"] = st.ghostWakes;      // INT1 woke it with nothing moving (1.8.9)
+  if (st.wireMisses) doc["im"] = st.wireMisses;      // movement that INT1 did not carry (1.8.9)
   if (crashInfo.open) {
     JsonObject c = doc["crash"].to<JsonObject>();
     c["at"] = static_cast<long>(crashInfo.at);
@@ -277,6 +303,7 @@ String reportJson(const char* reason, const Fix* fix, bool moving, float tilt, b
   if (restartReason) doc["rst"] = restartReason;  // why the board started afresh this time
   if (firmwareNote()[0]) doc["otaErr"] = firmwareNote();  // why the last update did not go in
   if (httpFraming[0]) doc["hr"] = httpFraming;
+  if (modem.postNote()[0]) doc["hw"] = modem.postNote();  // how a request over 4G went wrong (1.9.0)
   String out;
   serializeJson(doc, out);
   return out;
@@ -319,6 +346,8 @@ Reply sendReport(const char* reason, const Fix* fix, bool moving, float tilt) {
     return reply;
   }
   reply.ok = true;
+  dropSentRidePoints();   // they have arrived
+  modem.clearPostNote();  // and so has what it said about the last request that went wrong
   st.lastViaWifi = viaWifi;
   keepNewFirmware();  // a new program that reached the server stays (nothing happens otherwise)
   // What this report carried has arrived. This answer's own framing goes with the next one.
@@ -388,6 +417,9 @@ Reply sendReport(const char* reason, const Fix* fix, bool moving, float tilt) {
     takeReference();
   }
   st.touches = 0;
+  st.sensorResets = 0;
+  st.ghostWakes = 0;
+  st.wireMisses = 0;
   st.smsResult = 0;
   st.failures = 0;
   st.nextHeartbeat = clockNow() + st.heartbeatS;
@@ -464,14 +496,15 @@ bool countTouch() {
   return true;
 }
 
-// Alarm: a knock after the bike had stood still. The same 3-second look as when it is parked
-// decides, so a passing lorry or a gust does not sound the alarm again after the owner has seen
-// it. Light touches count only when they keep coming (three within two minutes), as when parked.
-// No lean check: the movement the owner has seen may have left the bike leaning differently.
+// A knock after the bike had stood still, during an alarm or while riding (1.8.8). The same 3-second
+// look as when it is parked decides, so a passing lorry or a gust does not sound the alarm again
+// after the owner has seen it, and a knock on a standing bike is no ride. Light touches count only
+// when they keep coming (three within two minutes), as when parked. No lean check: the movement the
+// owner has seen, or the ride, may have left the bike leaning differently.
 bool knockIsMovement() {
   const MotionResult m = accel.classify(st.ref, false, st.sensitivity);
   accel.consumeMovement();  // the shaking just measured, and the change of sampling rate
-  Serial.printf("alarm: knock, %u shaky tenths -> %s\n", static_cast<unsigned>(m.shakyTenths),
+  Serial.printf("knock, %u shaky tenths -> %s\n", static_cast<unsigned>(m.shakyTenths),
                 m.kind == MotionKind::Motion ? "movement" : "touch");
   return m.kind == MotionKind::Motion || countTouch();
 }
@@ -521,6 +554,9 @@ void runAlarm(bool urgent) {
           st.mode = Mode::Parked;
           takeReference();
         } else {
+          // Disarmed with the bike rolling on (ridden off armed): the live ride at once (see rollOn).
+          rollOn = (fix.valid && fix.speedKmh >= RIDE_MOVING_KMH) ||
+                   clockNow() - st.lastMoved < static_cast<time_t>(ROLL_ON_S);
           st.mode = Mode::Riding;
           st.lastMoved = clockNow();
         }
@@ -560,6 +596,7 @@ void onMovement(float tilt) {
   }
   if (!reply.ok) {
     st.motionPending = true;  // tried again after a while
+    st.nextMotionTry = clockNow() + retryDelayS();
     return;
   }
   st.motionPending = false;
@@ -621,6 +658,12 @@ void keepRidePoint(const Fix& fix) {
     ridePointCount--;
   }
   ridePoints[ridePointCount++] = {t, fix.lat, fix.lon, fix.speedKmh};
+}
+
+// A GPS point read while a ride report waited for its answer (Modem::whileWaiting, 1.9.0).
+void keepWaitingPoint(const Fix& fix) {
+  if (fix.speedKmh >= RIDE_MOVING_KMH) st.lastMoved = clockNow();
+  keepRidePoint(fix);
 }
 
 // Riding fast: how gravity points when the bike is upright. In a turn the bike leans, but for the
@@ -756,8 +799,7 @@ void crashWatch(Fix last) {
     const Reply reply = sendReport("crash", &last, crashInfo.over, NAN);
     setCpuFrequencyMhz(80);  // sendReport speeds up for the encryption
     if (reply.ok) {
-      heardAt = clockNow();
-      ridePointCount = 0;  // the ride so far went with it
+      heardAt = clockNow();  // the ride so far went with it (sendReport lets those points go)
       Serial.printf("fall: server waits %d s%s\n", reply.crashWait, reply.crashEnd ? ", done" : "");
       if (reply.smsTo.length()) smsDone = true;
       followUp(reply, true);  // the SMS to the contact, when the server sends it
@@ -779,11 +821,13 @@ void crashWatch(Fix last) {
 // the speed and the route as they happen. Each report also asks the server whether the alarm is
 // still off: armed, it stops at once (see sendReport). It returns once the bike has stood still
 // for a minute (a long red light, or parked: the minute checks take over, as before), or when the
-// battery runs too low.
+// battery runs too low. While a report waits for its answer the points go on (1.9.0).
 void rideLive() {
   Serial.println("riding: live");
+  rollOn = false;
   modem.powerOn();
   modem.gpsOn();
+  modem.whileWaiting(keepWaitingPoint);
   ridePointCount = 0;
   nearbyCount = 0;  // no Wi-Fi scan while riding
   Fix last;
@@ -795,8 +839,7 @@ void rideLive() {
     const Reply reply = sendReport("ride", &last, moved, NAN);
     setCpuFrequencyMhz(80);  // sendReport speeds up for the encryption; the GPS needs little
     if (!reply.ok) return;   // the points wait for the next report
-    ridePointCount = 0;
-    moved = false;
+    moved = false;           // the points it carried are gone (sendReport); later ones wait
     followUp(reply, true);
     if (reply.track) {
       st.mode = Mode::Alarm;
@@ -833,13 +876,16 @@ void rideLive() {
     const uint32_t spent = millis() - started;
     if (spent < RIDE_POINT_S * 1000UL) pause(RIDE_POINT_S * 1000UL - spent);
   }
+  modem.whileWaiting(nullptr);
   ridePointCount = 0;
+  rollOn = false;  // an alarm ended during this ride: the loop above rode on
 }
 
-// Riding: once a minute, see whether the bike moved.
+// Riding: once a minute, see whether the bike moved. Movement felt meanwhile counts only if it goes
+// on now, or is the third light touch in two minutes (1.8.8): a knock is no ride.
 void ridingCheck() {
   const time_t now = clockNow();
-  if (!accel.consumeMovement()) {
+  if (!accel.consumeMovement() || !knockIsMovement()) {
     if (now - st.lastMoved >= static_cast<time_t>(PARK_AFTER_S)) park();
     return;
   }
@@ -892,8 +938,14 @@ void onAccelWake() {
   if (st.mode == Mode::Riding) {
     // Movement wakes a riding board only after it has stood still for a minute (see
     // sleepUntilNext): moving off again, or someone taking the bike right after it was armed.
-    // Ask the server at once.
-    accel.consumeMovement();
+    // Real movement asks the server at once. Since 1.8.8 a knock first gets the look: on 2026-11-24
+    // knocks on the desk the board lay on kept it riding, modem and GPS on, for minutes at a time.
+    if (!knockIsMovement()) {
+      // Still standing. Parked by now, as the minute check would find (knocks coming every few
+      // seconds would otherwise keep putting that check off).
+      if (clockNow() - st.lastMoved >= static_cast<time_t>(PARK_AFTER_S)) park();
+      return;
+    }
     st.lastMoved = clockNow();
     onMovement(NAN);
     return;
@@ -909,12 +961,50 @@ void onAccelWake() {
   }
 }
 
+// The wake-up wire, ADXL345 INT1 to IO39 (1.8.9). The sensor keeps a note of movement until it is
+// asked, and holds INT1 high meanwhile, so the two must agree. On 2026-11-24 a hard shake at 21:36
+// woke nothing, a little after the owner had put back a wire that had come off the sensor.
+
+// Woken through INT1 with no movement noted: the line went high by itself (a loose wire leaves IO39
+// floating: it has no pull resistor). Nothing moved; INT1 is not trusted for a while, so a floating
+// line cannot keep waking it (and three such wakes cannot count as movement). The 2-minute checks
+// look for movement meanwhile.
+bool ghostWake(bool sensor) {
+  // A sensor set up again just now lost its power: that may well have sent INT1 high. Counted as such.
+  if (!sensor || accel.reconfigured() || accel.movementNoted()) return false;
+  if (st.ghostWakes < 255) st.ghostWakes++;
+  st.intDistrustUntil = clockNow() + INT_DISTRUST_S;
+  Serial.println("woken through INT1 with no movement noted: the wire? INT1 left out for a while");
+  return true;
+}
+
+// Parked, woken by the timer: movement the sensor noted that did not wake the board. INT1 should then
+// be high; read low, the wire does not carry it. Either way it is handled as movement now. (High
+// means it began during this very wake, or INT1 was left out of the sleep.)
+bool missedMovement() {
+  if (st.mode != Mode::Parked || !accel.ok()) return false;
+  pinMode(ACCEL_INT_PIN, INPUT);
+  const bool lineHigh = digitalRead(ACCEL_INT_PIN) == HIGH;  // before asking: asking lets it go low
+  if (!accel.movementNoted()) return false;
+  if (!lineHigh) {
+    if (st.wireMisses < 255) st.wireMisses++;
+    st.intDistrustUntil = clockNow() + INT_DISTRUST_S;
+    Serial.println("movement noted that INT1 did not carry: the wire?");
+  }
+  return true;
+}
+
 void onTimer() {
   if (st.mode == Mode::Alarm) {
     runAlarm();
     return;
   }
   if (st.motionPending) {
+    // Parked, movement that could not be reported is tried again on its own schedule (5, 10, 20
+    // minutes...) or before any other report; the sensor checks in between leave it (1.8.8).
+    const time_t now = clockNow();
+    const bool reportDue = now >= st.nextHeartbeat || (st.checkInS && now >= st.nextCheckIn);
+    if (st.mode == Mode::Parked && !battery.usb && now < st.nextMotionTry && !reportDue) return;
     onMovement(NAN);
     if (st.motionPending) return;  // still no signal: try again later
   }
@@ -977,7 +1067,8 @@ bool keepModemOnNetwork() {
   }
   digitalWrite(LED_PIN, LOW);
   accel.clearInterrupt();
-  if (wakeOnMovement && accel.ok()) {
+  // INT1 lately went high with nothing moving (see ghostWake): not trusted to wake it for a while.
+  if (wakeOnMovement && accel.ok() && clockNow() >= st.intDistrustUntil) {
     esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(ACCEL_INT_PIN), 1);
   }
   esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(seconds) * 1000000ULL);
@@ -1005,12 +1096,17 @@ bool keepModemOnNetwork() {
     default: {
       time_t due = st.nextHeartbeat;
       if (st.checkInS && st.nextCheckIn < due) due = st.nextCheckIn;
-      if (st.motionPending && now + static_cast<time_t>(retryDelayS()) < due) due = now + retryDelayS();
+      if (st.motionPending && st.nextMotionTry < due) due = st.nextMotionTry;
       time_t seconds = due - now;
       if (seconds < 1) seconds = 1;
       if (seconds > 24 * 3600) seconds = 24 * 3600;
       // On the bike's power, look every minute whether it is still there (costs no battery).
       if (battery.usb && seconds > static_cast<time_t>(POWER_CHECK_S)) seconds = POWER_CHECK_S;
+      // A motion sensor that loses its power for a moment (a loose wire) comes back without its
+      // settings and wakes nothing. A short wake every 2 minutes sets it up again (runOnce), looks
+      // for movement that INT1 did not carry (missedMovement), and tries again a sensor that did not
+      // answer this time (1.8.9; 1.8.8 only when it answered).
+      if (seconds > static_cast<time_t>(SENSOR_CHECK_S)) seconds = SENSOR_CHECK_S;
       sleepFor(static_cast<uint32_t>(seconds), true);
     }
   }
@@ -1039,7 +1135,20 @@ void runOnce() {
   const bool powerBack = !fresh && st.usbKnown && !st.onUsb && battery.usb;
   st.onUsb = battery.usb;
   st.usbKnown = true;
-  const bool sensor = accel.begin(st.sensitivity);
+  bool sensor = accel.begin(st.sensitivity);
+  // A wire that makes poor contact may fail one attempt and not the next (1.8.9).
+  for (uint8_t i = 0; !sensor && i < 2; i++) {
+    delay(20);
+    sensor = accel.begin(st.sensitivity);
+  }
+  // Woken from its sleep, the sensor should still have its settings. Without them it had lost its
+  // power for a moment (a loose wire?) and could wake nothing since: on 2026-11-24 a hard shake at
+  // 21:36 went unnoticed until the check-in at 21:45 set it up again. Told with the next report.
+  if (sensor && !fresh && accel.reconfigured() &&
+      (cause == ESP_SLEEP_WAKEUP_TIMER || cause == ESP_SLEEP_WAKEUP_EXT0)) {
+    if (st.sensorResets < 255) st.sensorResets++;
+    Serial.println("sensor: had lost its settings, set up again");
+  }
   Serial.printf("\nmoto-alarm %s: wake %d, mode %d, battery %u mV (%d%%), sensor %s\n", FIRMWARE_VERSION,
                 static_cast<int>(cause), static_cast<int>(st.mode), static_cast<unsigned>(battery.mv),
                 static_cast<int>(battery.pct), sensor ? "ok" : "MISSING");
@@ -1051,11 +1160,16 @@ void runOnce() {
   if (fresh) {
     firstStart();
   } else if (cause == ESP_SLEEP_WAKEUP_EXT0) {
-    onAccelWake();  // its report says the power state too
+    if (!ghostWake(sensor)) onAccelWake();  // its report says the power state too
   } else if ((powerLost || powerBack) && st.mode != Mode::Alarm) {
     onPowerChange(powerLost);
+  } else if (missedMovement()) {
+    onAccelWake();
   } else {
     onTimer();  // the timer, or a restart after a crash: carry on where we were
   }
+  // An alarm the owner has just ended by disarming, with the bike rolling on: the live ride now,
+  // not after the riding minute's sleep (1.9.0).
+  if (rollOn && st.mode == Mode::Riding) rideLive();
   sleepUntilNext();
 }

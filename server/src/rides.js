@@ -10,7 +10,11 @@ export const rideSeconds = (settings) => (settings?.lowPower ? LOW_POWER_RIDE_SE
 export const RIDE_GAP_MS = 15 * 60_000; // nothing heard for this long: the ride is over
 export const MOVING_KMH = 5; // slower than this is standing (a red light, GPS drift)
 const MIN_RIDE_M = 300; // shorter: pushing the bike around the garage, not a ride
-const MAX_POINTS = 60; // per report (the board keeps up to 40 while it has no signal)
+// Disarmed, the board takes any movement it feels for the start of a ride, also a knock on the desk
+// it lies on (2026-11-24: «Οδηγείς τώρα» with the board standing still at home). The app says a ride
+// is under way only once the GPS has seen the bike go this far.
+export const MOVED_OFF_M = 50;
+const MAX_POINTS = 80; // per report (the board keeps up to 60 while it has no signal, 40 before 1.9.0)
 const MAX_KMH = 300; // a GPS speed or a jump faster than this is a glitch
 export const MAX_TRIPS = 200; // summaries kept (the points themselves go after 90 days)
 
@@ -99,16 +103,17 @@ export async function endStaleRide(store, now = Date.now()) {
  * Follows the ride from a device report. `points` are the report's GPS points (or its one fix).
  * A ride starts with movement while disarmed and ends with "parked", with arming, or after a
  * quarter of an hour without news.
- * Returns what changed: { started, ride (the one under way, or null), ended (summary of a ride kept
- * just now, or null) }.
+ * Returns what changed: { started, movedOff (the GPS saw the bike go off just now, see MOVED_OFF_M),
+ * ride (the one under way, or null), ended (summary of a ride kept just now, or null) }.
  */
 export async function trackRide({ store, reason, points, armed, now }) {
   const stale = await endStaleRide(store, now);
   let ride = await store.get('ride');
   const riding = !armed && (reason === 'ride' || reason === 'motion');
-  if (!ride && !riding) return { started: false, ride: null, ended: stale };
+  if (!ride && !riding) return { started: false, movedOff: false, ride: null, ended: stale };
   const started = !ride;
   if (!ride) ride = { start: points[0]?.ts ?? now, last: now, m: 0, movingS: 0, max: 0, n: 0, prev: null, speed: null };
+  const before = hasMovedOff(ride);
   for (const p of points) {
     // Points taken before the report that started the ride got through still belong to it: the
     // ride's route and details are looked up from its start.
@@ -117,13 +122,22 @@ export async function trackRide({ store, reason, points, armed, now }) {
   }
   ride.last = now;
   await store.set('ride', ride);
-  if (armed || reason === 'parked') return { started, ride: null, ended: await endRide(store, now) };
-  return { started, ride, ended: stale };
+  const movedOff = !before && hasMovedOff(ride);
+  if (armed || reason === 'parked') return { started, movedOff, ride: null, ended: await endRide(store, now) };
+  return { started, movedOff, ride, ended: stale };
 }
 
-/** The ride under way, for the app: null when there is none. `every`: seconds between the board's reports. */
+/** Whether the GPS has seen the bike go anywhere in this ride, not only the board feel a knock. */
+export function hasMovedOff(ride) {
+  return (ride?.m ?? 0) >= MOVED_OFF_M;
+}
+
+/**
+ * The ride under way, for the app: null when there is none, or while the GPS has not seen the bike
+ * go anywhere yet. `every`: seconds between the board's reports.
+ */
 export function rideView(ride, now = Date.now(), every = RIDE_REPORT_SECONDS) {
-  if (!ride || now - ride.last > RIDE_GAP_MS) return null;
+  if (!ride || now - ride.last > RIDE_GAP_MS || !hasMovedOff(ride)) return null;
   return {
     ...rideSummary(ride),
     every,

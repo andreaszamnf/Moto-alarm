@@ -62,13 +62,13 @@ export async function loanView(store, now = Date.now()) {
 
 /**
  * Called with every device report, after the ride was followed (`news` from trackRide). While lent
- * out: tells the owner when it starts moving, when it goes faster than the limit, and how the ride
- * went once it stops.
+ * out: tells the owner when it starts moving (once the GPS sees it go, not at a knock in the
+ * workshop), when it goes faster than the limit, and how the ride went once it stops.
  */
 export async function loanNews({ store, news, now = Date.now(), notify = async () => {} }) {
   const loan = await store.get('loan');
   if (!loan?.on || !news) return;
-  if (news.started) {
+  if (news.movedOff) {
     await notify({
       title: 'Η μηχανή ξεκίνησε',
       body: 'Είναι δανεική: δεν χτυπάει συναγερμός. Στην εφαρμογή βλέπεις πού πάει και πόσο γρήγορα.',
